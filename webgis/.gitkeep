@@ -1,0 +1,2 @@
+# Integrasi MAPID Maps / GEO MAPID (frontend + API calls).
+# API key & konfigurasi HARUS di backend / .env (jangan commit).

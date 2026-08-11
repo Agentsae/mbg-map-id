@@ -1,0 +1,23 @@
+# GeoTransit Insight — Python dependencies (data & AI layer)
+# Instal: pip install -r requirements.txt
+
+# Geospatial core
+geopandas>=0.14
+shapely>=2.0
+pyproj>=3.6
+fiona>=1.9
+rtree>=1.2
+
+# Data & numerik
+numpy>=1.26
+pandas>=2.1
+scikit-learn>=1.4
+
+# Visualisasi (opsional, untuk grafik dashboard/analisis)
+matplotlib>=3.8
+
+# Google Earth Engine (opsional, bila pakai citra)
+earthengine-api>=0.1.0
+
+# HTTP client (integrasi GEO MAPID API)
+requests>=2.31
