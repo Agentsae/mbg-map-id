@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # GeoTransit Insight — Tim MBG (MassTransit Based Geoinsight)
 
 **Spatial Decision Support System (SDSS) berbasis AI** untuk optimalisasi layanan transportasi massal Kota Bekasi.
@@ -56,3 +57,28 @@ pip install -r requirements.txt
 - PRD: `PRD_GeoTransitInsight-2.docx`
 - Proposal: `MBG_GeoTransitInsight-2.pdf`
 - Notulen TM I: `Notulen tech meet revisi.pdf`
+=======
+# GeoTransit Insight
+
+Dashboard web GIS untuk analisis prioritas transportasi berbasis akses, equity, dan simualsi what-if.
+
+## Stack
+
+- React + Vite
+- MapLibre GL JS
+- Supabase
+- Gemini API via Supabase Edge Function
+
+## Mulai
+
+```bash
+npm install
+npm run dev
+```
+
+## Build
+
+```bash
+npm run build
+```
+>>>>>>> ebf788b (framework)
