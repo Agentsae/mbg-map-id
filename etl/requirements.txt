@@ -1,0 +1,6 @@
+geopandas
+shapely
+pandas
+numpy
+supabase
+python-dotenv
