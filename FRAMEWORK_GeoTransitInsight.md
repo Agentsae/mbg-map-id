@@ -180,16 +180,14 @@ Input: {
 
 Stack ini menggabungkan dua bahasa berbeda — penting dibagi jelas dari awal supaya tidak tumpang tindih:
 
-| Bagian | Bahasa | Siapa (usulan) |
-|---|---|---|
-| ETL data mentah → siap pakai | Python (GeoPandas/Shapely) | Galuh Eka Permana |
-| Perhitungan CAI/TDI/Equity Index (batch, offline) | Python + AHP weights | Galuh Eka Permana |
-| Script upload hasil skor ke Supabase | Python (`supabase-py`) | Galuh Eka Permana |
-| Frontend React + MapLibre + Dashboard | TypeScript/JavaScript | Samuel Alfa Edison |
-| Edge Function `ai-insight` (panggil Gemini) | TypeScript (Deno) | Samuel Alfa Edison — lebih natural karena sudah pegang JS di frontend |
-| RPC function `simulate_new_stop` | SQL (di Supabase SQL Editor) | Galuh Eka Permana (logika spasial) + Samuel (integrasi ke frontend) |
-
-Kalau Galuh belum familiar TypeScript, ini pembagian yang aman — Galuh sepenuhnya di Python/SQL, Samuel sepenuhnya di TypeScript, ketemu di titik `supabase.rpc()` dan tabel yang sudah terisi.
+| Bagian | Bahasa |
+|---|---|
+| ETL data mentah → siap pakai | Python (GeoPandas/Shapely) | 
+| Perhitungan CAI/TDI/Equity Index (batch, offline) | Python + AHP weights |
+| Script upload hasil skor ke Supabase | Python (`supabase-py`) |
+| Frontend React + MapLibre + Dashboard | TypeScript/JavaScript |
+| Edge Function `ai-insight` (panggil Gemini) | TypeScript (Deno) |
+| RPC function `simulate_new_stop` | SQL (di Supabase SQL Editor) |
 
 ---
 

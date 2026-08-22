@@ -2,21 +2,28 @@
 compute_scores.py — GeoTransit Insight
 Tim MBG — MAPID WebGIS Competition 2026
 
-Implementasi Composite Accessibility Index (CAI) memakai Weighted Linear
-Combination, sesuai Bab 7a proposal & framework teknis.
+Implementasi tiga skor inti sesuai Bab 7 PRD & framework teknis:
+  - Composite Accessibility Index (CAI)  — Weighted Linear Combination, per titik/grid
+  - Transit Desert Index (TDI)            — rasio kebutuhan vs aksesibilitas, per grid
+  - Transit Equity Index                  — CAI + indikator kerentanan, per kelurahan
 
 Cara pakai:
-    python compute_scores.py            # jalankan demo dengan data sintetis
+    python compute_scores.py            # jalankan demo ketiga skor dengan data sintetis
     (nanti) python compute_scores.py --input data/processed/titik_kandidat.csv
 
 TODO integrasi selanjutnya (belum dikerjakan di sini, butuh data asli):
-  - Ganti load_demo_data() dengan query GeoPandas/PostGIS asli:
-      * n_kepadatan   <- spatial join grid_analisis dengan penduduk
+  - Ganti load_demo_data()/load_demo_grid_data()/load_demo_equity_data() dengan
+    query GeoPandas/PostGIS asli:
+      * n_kepadatan   <- spatial join grid_analisis/batas_administrasi dengan penduduk
       * n_jarak_inv   <- ST_Distance / GeoPandas .distance() ke poi terdekat
       * n_volume      <- jumlah penumpang KRL/BRT dalam radius tertentu
       * n_survei      <- skor_survei_gabungan dari tabel halte_eksisting
+      * skor_aksesibilitas_transit <- coverage isochrone 400m/800m per grid
+      * kepadatan_poi_harian, rasio_tanpa_kendaraan <- overlay poi + data BPS/Dukcapil
+      * skor_cai_rata2, jarak_rata2_* per kelurahan <- agregasi skor_cai per grid/titik
+        yang jatuh di dalam tiap kelurahan (spatial join ke batas_administrasi)
   - Bobot sebaiknya dibaca dari tabel konfigurasi_bobot (hasil AHP dengan
-    mentor), bukan hardcoded seperti DEFAULT_WEIGHTS di bawah — ganti
+    mentor), bukan hardcoded seperti DEFAULT_*_WEIGHTS di bawah — ganti
     load_weights() begitu sesi AHP selesai.
 """
 
@@ -30,6 +37,29 @@ DEFAULT_WEIGHTS = {
     "jarak_inv": 0.25,
     "volume": 0.25,
     "survei": 0.15,
+}
+
+# Bobot untuk Indeks Kebutuhan Mobilitas (komponen TDI) — proksi kerentanan
+# mobilitas sesuai Bab 7 PRD: "proporsi lansia/difabel, kepadatan POI
+# kebutuhan harian, rasio rumah tangga tanpa kendaraan pribadi (jika data
+# tersedia)". Juga sementara, ganti begitu ada hasil AHP.
+DEFAULT_MOBILITY_WEIGHTS = {
+    "usia_rentan": 0.40,
+    "poi_harian": 0.35,
+    "tanpa_kendaraan": 0.25,
+}
+
+# Bobot untuk Transit Equity Index — menggabungkan composite accessibility
+# index (dibalik, karena makin rendah CAI makin timpang) dengan indikator
+# kerentanan per kelurahan (Bab 7 PRD). Kolom mengikuti skema tabel
+# skor_equity di 001_init_tables.sql.
+DEFAULT_EQUITY_WEIGHTS = {
+    "aksesibilitas_inv": 0.30,
+    "kepadatan": 0.15,
+    "usia_rentan": 0.20,
+    "akses_pendidikan": 0.15,
+    "akses_kesehatan": 0.10,
+    "akses_kerja": 0.10,
 }
 
 
@@ -105,6 +135,133 @@ def sensitivity_check(df: pd.DataFrame, base_weights: dict, delta: float = 0.1) 
     return pd.DataFrame(results)
 
 
+def compute_indeks_kebutuhan_mobilitas(df: pd.DataFrame, weights: dict = None) -> pd.Series:
+    """
+    Hitung Indeks Kebutuhan Mobilitas (0-1) — komponen TDI, sesuai proksi
+    Bab 7 PRD: proporsi lansia/difabel, kepadatan POI kebutuhan harian,
+    rasio rumah tangga tanpa kendaraan pribadi.
+
+    df wajib punya kolom mentah:
+      - proporsi_usia_rentan   (0-1, gabungan proporsi lansia + difabel/balita,
+                                 sudah rasio jadi tidak dinormalisasi ulang)
+      - kepadatan_poi_harian   (jumlah POI kebutuhan harian per grid/radius)
+      - rasio_tanpa_kendaraan  (0-1, OPSIONAL — PRD: "jika data tersedia")
+
+    Kalau rasio_tanpa_kendaraan belum tersedia (data BPS/susenas belum masuk),
+    kriteria itu diberi nilai netral 0.5 supaya bobotnya tidak hilang begitu
+    saja, tapi juga tidak memihak — ganti begitu datanya ada.
+    """
+    weights = weights or DEFAULT_MOBILITY_WEIGHTS
+    assert abs(sum(weights.values()) - 1.0) < 1e-6, "Bobot mobilitas harus berjumlah 1.0"
+
+    n_usia_rentan = df["proporsi_usia_rentan"]
+    n_poi_harian = normalize_min_max(df["kepadatan_poi_harian"])
+
+    if "rasio_tanpa_kendaraan" in df.columns:
+        n_tanpa_kendaraan = df["rasio_tanpa_kendaraan"]
+    else:
+        print(
+            "[PERINGATAN] Kolom 'rasio_tanpa_kendaraan' belum ada — pakai nilai netral 0.5 "
+            "untuk kriteria ini sampai data BPS/susenas tersedia."
+        )
+        n_tanpa_kendaraan = pd.Series(0.5, index=df.index)
+
+    return (
+        weights["usia_rentan"] * n_usia_rentan
+        + weights["poi_harian"] * n_poi_harian
+        + weights["tanpa_kendaraan"] * n_tanpa_kendaraan
+    )
+
+
+def compute_tdi(df: pd.DataFrame, mobility_weights: dict = None) -> pd.DataFrame:
+    """
+    Hitung Transit Desert Index (TDI) per grid, sesuai formula Bab 7 PRD:
+
+        TDI = (Kepadatan Penduduk x Indeks Kebutuhan Mobilitas) / Skor Aksesibilitas Transit
+
+    df wajib punya kolom mentah:
+      - kepadatan_penduduk           (jiwa/km2 per grid)
+      - skor_aksesibilitas_transit   (0-1, dari coverage isochrone 400m/800m —
+                                       makin tinggi makin terlayani)
+      - proporsi_usia_rentan, kepadatan_poi_harian, (opsional) rasio_tanpa_kendaraan
+        -> lihat compute_indeks_kebutuhan_mobilitas()
+
+    Return: df + kolom indeks_kebutuhan_mobilitas, tdi_raw (rasio mentah,
+    satuannya tidak berskala 0-1, disimpan untuk transparansi), dan skor_tdi
+    (0-1 hasil normalisasi tdi_raw, dipakai untuk ranking/pewarnaan peta —
+    skor lebih tinggi = grid makin "transit desert", makin butuh prioritas).
+    """
+    out = df.copy()
+    out["indeks_kebutuhan_mobilitas"] = compute_indeks_kebutuhan_mobilitas(out, mobility_weights)
+
+    # Guard pembagi nol: grid yang benar-benar tidak terlayani sama sekali
+    # (skor_aksesibilitas_transit = 0) tetap harus dihitung, bukan error/NaN
+    # atau infinity yang merusak ranking — pakai nilai lantai (floor) kecil
+    # yang setara dengan "aksesibilitas hampir nihil".
+    AKSESIBILITAS_FLOOR = 0.01
+    aksesibilitas_aman = out["skor_aksesibilitas_transit"].clip(lower=AKSESIBILITAS_FLOOR)
+
+    out["tdi_raw"] = (
+        out["kepadatan_penduduk"] * out["indeks_kebutuhan_mobilitas"] / aksesibilitas_aman
+    )
+    out["skor_tdi"] = normalize_min_max(out["tdi_raw"])
+
+    return out.sort_values("skor_tdi", ascending=False).reset_index(drop=True)
+
+
+def compute_equity_index(df: pd.DataFrame, weights: dict = None) -> pd.DataFrame:
+    """
+    Hitung Transit Equity Index per kelurahan, sesuai Bab 7 PRD:
+    "menggabungkan composite accessibility index dengan indikator kerentanan
+    untuk menghasilkan ranking ketimpangan akses antarkelurahan".
+
+    df wajib punya kolom mentah per kelurahan:
+      - kepadatan_penduduk          (jiwa/km2)
+      - skor_cai_rata2              (0-1, rata-rata skor_cai semua titik/grid
+                                      dalam kelurahan tsb — hasil spatial join)
+      - proporsi_usia_rentan        (0-1, sudah rasio, tidak dinormalisasi ulang)
+      - jarak_rata2_pendidikan_m    (meter, rata-rata jarak ke sekolah terdekat)
+      - jarak_rata2_kesehatan_m     (meter, rata-rata jarak ke faskes terdekat)
+      - jarak_rata2_kerja_m         (meter, rata-rata jarak ke pusat kerja terdekat)
+
+    Return: df + kolom n_kepadatan, n_usia_rentan, n_akses_pendidikan,
+    n_akses_kesehatan, n_akses_kerja, skor_final, ranking — nama kolom
+    sengaja disamakan dengan skema tabel skor_equity di 001_init_tables.sql
+    supaya siap diupload langsung via upload_to_supabase.py.
+
+    Catatan skala: skor_final di sini adalah SKOR KETIMPANGAN (equity gap),
+    bukan skor akses — semakin TINGGI skor_final, semakin dirugikan/tertinggal
+    kelurahan tsb (konsisten dengan EquityIndexView.jsx di frontend). Jarak ke
+    fasilitas TIDAK dibalik (inverse=False) karena jarak besar = akses buruk =
+    memang seharusnya menaikkan skor ketimpangan.
+    """
+    weights = weights or DEFAULT_EQUITY_WEIGHTS
+    assert abs(sum(weights.values()) - 1.0) < 1e-6, "Bobot equity index harus berjumlah 1.0"
+
+    out = df.copy()
+    # CAI tinggi = akses bagus -> equity gap rendah, jadi dibalik (inverse=True)
+    out["n_aksesibilitas_inv"] = normalize_min_max(out["skor_cai_rata2"], inverse=True)
+    out["n_kepadatan"] = normalize_min_max(out["kepadatan_penduduk"])
+    out["n_usia_rentan"] = out["proporsi_usia_rentan"]
+    out["n_akses_pendidikan"] = normalize_min_max(out["jarak_rata2_pendidikan_m"])
+    out["n_akses_kesehatan"] = normalize_min_max(out["jarak_rata2_kesehatan_m"])
+    out["n_akses_kerja"] = normalize_min_max(out["jarak_rata2_kerja_m"])
+
+    out["skor_final"] = (
+        weights["aksesibilitas_inv"] * out["n_aksesibilitas_inv"]
+        + weights["kepadatan"] * out["n_kepadatan"]
+        + weights["usia_rentan"] * out["n_usia_rentan"]
+        + weights["akses_pendidikan"] * out["n_akses_pendidikan"]
+        + weights["akses_kesehatan"] * out["n_akses_kesehatan"]
+        + weights["akses_kerja"] * out["n_akses_kerja"]
+    )
+
+    out = out.sort_values("skor_final", ascending=False).reset_index(drop=True)
+    # ranking 1 = paling dirugikan/tertinggal (skor_final tertinggi)
+    out["ranking"] = out["skor_final"].rank(ascending=False, method="min").astype(int)
+    return out
+
+
 def load_demo_data() -> pd.DataFrame:
     """Data sintetis untuk demo/testing — GANTI dengan data asli."""
     return pd.DataFrame({
@@ -121,8 +278,48 @@ def load_demo_data() -> pd.DataFrame:
     })
 
 
+def load_demo_grid_data() -> pd.DataFrame:
+    """Data grid sintetis untuk demo TDI — GANTI dengan hasil fishnet asli."""
+    return pd.DataFrame({
+        "grid_id": ["GRID-KAJ-01", "GRID-BKT-02", "GRID-MJY-03", "GRID-RWL-04"],
+        "nama_area": [
+            "Kaliabang Tengah (kelurahan terpadat)",
+            "Sekitar Stasiun Bekasi Timur",
+            "Mustika Jaya (kandidat transit desert)",
+            "Rawa Lumbu (kandidat transit desert)",
+        ],
+        "kepadatan_penduduk": [18500, 11000, 15200, 13800],
+        "skor_aksesibilitas_transit": [0.10, 0.85, 0.15, 0.20],
+        "proporsi_usia_rentan": [0.22, 0.15, 0.25, 0.19],
+        "kepadatan_poi_harian": [12, 30, 9, 14],
+        # rasio_tanpa_kendaraan sengaja tidak disertakan di demo ini supaya
+        # jalur fallback netral 0.5 di compute_indeks_kebutuhan_mobilitas()
+        # ikut teruji — isi kolom ini begitu data BPS/susenas tersedia.
+    })
+
+
+def load_demo_equity_data() -> pd.DataFrame:
+    """Data kelurahan sintetis untuk demo Transit Equity Index — GANTI dengan
+    hasil agregasi skor_cai per kelurahan (spatial join ke batas_administrasi)."""
+    return pd.DataFrame({
+        "nama_kelurahan": [
+            "Mustika Jaya",
+            "Bantar Gebang",
+            "Rawa Lumbu",
+            "Bekasi Utara",
+            "Marga Mulya",
+        ],
+        "kepadatan_penduduk": [15200, 9600, 13800, 12100, 8200],
+        "skor_cai_rata2": [0.22, 0.28, 0.31, 0.38, 0.71],
+        "proporsi_usia_rentan": [0.25, 0.21, 0.19, 0.20, 0.14],
+        "jarak_rata2_pendidikan_m": [1100, 950, 900, 700, 350],
+        "jarak_rata2_kesehatan_m": [1800, 1600, 1400, 1000, 500],
+        "jarak_rata2_kerja_m": [2500, 2100, 1900, 1300, 600],
+    })
+
+
 if __name__ == "__main__":
-    print("=== Demo perhitungan Composite Accessibility Index (data sintetis) ===\n")
+    print("=== 1. Demo Composite Accessibility Index (CAI) — data sintetis ===\n")
     demo = load_demo_data()
     result = compute_cai(demo, DEFAULT_WEIGHTS)
 
@@ -130,10 +327,35 @@ if __name__ == "__main__":
         "nama_lokasi", "n_kepadatan", "n_jarak_inv", "n_volume", "n_survei", "skor_cai"
     ]].round(3).to_string(index=False))
 
-    print("\n=== Sensitivity analysis (geser tiap bobot ±0.1) ===\n")
+    print("\n--- Sensitivity analysis CAI (geser tiap bobot ±0.1) ---\n")
     sens = sensitivity_check(demo, DEFAULT_WEIGHTS)
     print(sens.to_string(index=False))
 
     n_unstable = (sens["jumlah_ranking_berubah"] > 0).sum()
     print(f"\n{n_unstable} dari {len(sens)} skenario pergeseran bobot mengubah ranking.")
     print("Jika sebagian besar 0 -> ranking cukup stabil (robust terhadap pemilihan bobot).")
+
+    print("\n\n=== 2. Demo Transit Desert Index (TDI) — data grid sintetis ===\n")
+    demo_grid = load_demo_grid_data()
+    tdi_result = compute_tdi(demo_grid, DEFAULT_MOBILITY_WEIGHTS)
+    print(tdi_result[[
+        "nama_area", "kepadatan_penduduk", "skor_aksesibilitas_transit",
+        "indeks_kebutuhan_mobilitas", "tdi_raw", "skor_tdi",
+    ]].round(3).to_string(index=False))
+    print(
+        "\nCatatan: skor_tdi tertinggi = grid paling 'transit desert' — kepadatan "
+        "& kebutuhan mobilitas tinggi, tapi aksesibilitas transit rendah."
+    )
+
+    print("\n\n=== 3. Demo Transit Equity Index — data kelurahan sintetis ===\n")
+    demo_equity = load_demo_equity_data()
+    equity_result = compute_equity_index(demo_equity, DEFAULT_EQUITY_WEIGHTS)
+    print(equity_result[[
+        "ranking", "nama_kelurahan", "skor_cai_rata2", "n_aksesibilitas_inv",
+        "n_kepadatan", "n_usia_rentan", "n_akses_pendidikan", "n_akses_kesehatan",
+        "n_akses_kerja", "skor_final",
+    ]].round(3).to_string(index=False))
+    print(
+        "\nCatatan: ranking 1 = kelurahan paling dirugikan/tertinggal aksesnya "
+        "(skor_final tertinggi), sesuai urutan yang ditampilkan EquityIndexView.jsx."
+    )

@@ -5,3 +5,8 @@ venv/
 __pycache__/
 *.pyc
 .DS_Store
+
+# Output ETL — hasil generate ulang dari script di etl/, bukan sumber data.
+# data/raw/ dan data/survei/ TIDAK diignore: itu data mentah & export MAPID
+# Apps yang memang perlu ikut repo supaya analisis bisa direproduksi tim.
+data/processed/
