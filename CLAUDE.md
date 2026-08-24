@@ -1,157 +1,90 @@
-# CLAUDE.md
+# GeoTransit Insight — Konteks Proyek untuk Claude Code
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+> Sumber kebenaran: `PRD_GeoTransitInsight.docx` (versi terbaru, submission 13 Sep 2026).
+> File ini adalah ringkasan teknis dari PRD tersebut, dibuat supaya tiap sesi Claude Code
+> punya konteks yang sama tanpa perlu membaca ulang dokumen Word 1000+ baris.
+> **Kalau PRD di-update, update juga file ini.**
 
-## Proyek
+## Stack sudah final (dikunci 24 Agustus 2026)
 
-GeoTransit Insight — WebGIS Spatial Decision Support System untuk optimalisasi
-transportasi massal Kota Bekasi. Tim MBG, MAPID WebGIS Competition #2 2026
-(submission 13 September 2026).
+PRD sempat punya inkonsistensi antara tabel teks dan diagram arsitektur (MapLibre vs Leaflet, Claude AI vs Gemini). **Sudah diputuskan tim:**
 
-Bahasa kerja tim: **Bahasa Indonesia**. Komentar kode, docstring, commit message,
-dan nama kolom database semuanya berbahasa Indonesia — ikuti konvensi itu.
+| Komponen | Keputusan final |
+|---|---|
+| Library peta | **MapLibre GL JS** |
+| AI Service | **Claude API** (Messages API, model `claude-haiku-4-5-20251001` untuk narasi cepat — lihat `supabase/functions/ai-insight/index.ts`) |
 
-## Perintah
+Kalau nanti ada kode/diagram lama yang masih menyebut Leaflet atau Gemini, itu sudah usang — update ke keputusan final di atas, jangan diikuti.
 
-```bash
-# Frontend (dari frontend/)
-npm install
-npm run dev          # localhost:5173
-npm run build
-npm run lint         # oxlint
+## Produk
 
-# ETL (dari etl/)
-pip install -r requirements.txt
-python compute_scores.py       # demo CAI + TDI + Equity Index, data sintetis
-python build_fishnet_grid.py   # demo fishnet grid + dasymetric mapping
-python upload_to_supabase.py   # butuh SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY
+**GeoTransit Insight** — Spatial Decision Support System (SDSS) berbasis WebGIS untuk membantu Dishub & Bappeda Kota Bekasi menentukan lokasi prioritas pembangunan infrastruktur transit massal berbasis data, bukan intuisi.
 
-# Supabase
-supabase db push                        # jalankan migrations 001 -> 002 -> 003 (urutan penting)
-supabase functions deploy ai-insight
-supabase secrets set GEMINI_API_KEY=xxx
+Prinsip inti yang TIDAK BOLEH dilanggar saat implementasi:
+- **AI adalah lapisan interpretasi, bukan penentu skor.** Model spasial deterministik (weighted overlay/MCDA) menghasilkan skor terlebih dahulu; AI (LLM) hanya menerjemahkan skor itu jadi narasi. AI tidak pernah menghasilkan angka sendiri.
+- **API key AI tidak boleh menyentuh frontend.** Hanya dipanggil dari Supabase Edge Function (server-side).
+- **Setiap skor harus bisa ditelusuri** — user klik lokasi di peta, sistem tunjukkan rincian kontribusi tiap kriteria, bukan cuma angka tunggal (lihat acceptance criteria Composite Accessibility Index di bawah).
+
+## Tech Stack
+
+| Layer | Teknologi |
+|---|---|
+| Frontend | React.js + MapLibre GL JS + MAPID Maps sebagai basemap |
+| Backend | Supabase Pro (PostgreSQL + PostGIS terkelola, auto-REST API, Storage untuk foto survei, Edge Functions) |
+| Database | PostgreSQL + PostGIS via Supabase |
+| GIS Platform | GEO MAPID (pengolahan data & analisis lokasi), Community Maps MAPID (sumber POI: Menu Go, Struk Go) |
+| AI | Claude API (Messages API), model `claude-haiku-4-5-20251001`, dipanggil via Supabase Edge Function — API key di server (`ANTHROPIC_API_KEY`, bukan `VITE_...`) |
+| Hosting | Vercel Pro (frontend) + Supabase Pro (backend/db) — hybrid, domain publik lewat subdomain resmi WebGIS MAPID (CNAME ke Vercel) |
+| Repo | GitHub, privat selama pengembangan |
+
+## Struktur Data / Metodologi (jangan diubah tanpa alasan kuat)
+
+- **Composite Accessibility Index (CAI)** — Weighted Linear Combination dari: kepadatan penduduk, jarak ke fasilitas umum (inverse), volume penumpang transit terdekat, skor survei lapangan. Bobot ditentukan lewat AHP bersama mentor.
+- **Transit Desert Index (TDI)** — per grid 250–500m (dasymetric mapping), rasio kebutuhan mobilitas terhadap skor aksesibilitas transit.
+- **Transit Equity Index** — CAI + dimensi kerentanan sosial (usia rentan, akses pendidikan/kesehatan/kerja) per kelurahan. Ranking ketimpangan, bukan ranking prioritas lokasi.
+- Simulasi What-If pakai estimasi jalan kaki (kecepatan 4–5 km/jam), BUKAN network routing riil (eksplisit out-of-scope).
+
+## Fitur & Acceptance Criteria (sumber: PRD Bab 8 — pakai ini sebagai definition of done)
+
+| Fitur | Acceptance Criteria |
+|---|---|
+| Peta Multi-Layer Gap Analysis | Layer kepadatan penduduk, jaringan transit eksisting, indeks gap aksesibilitas. Filter per kecamatan render ulang **< 2 detik**. |
+| Composite Accessibility Index & TDI | Klik lokasi di peta → tampilkan skor + **rincian kontribusi tiap kriteria** (bukan angka tunggal tanpa penjelasan). |
+| AI Spatial Consultant | Respons pertanyaan bahasa natural **< 5 detik**, pakai ringkasan data hasil model spasial — bukan raw coordinates dikirim ke LLM. |
+| Simulasi "What-If" | Klik titik di peta → proyeksi penduduk tambahan terlayani + estimasi waktu tempuh jalan kaki, **< 3 detik**. |
+| Transit Equity Index Dashboard | Ranking minimal **5 kelurahan** skor equity terendah + kelompok terdampak + 1 rekomendasi intervensi per kelurahan. |
+| Dashboard Indikator | Coverage ratio, jumlah transit desert teridentifikasi, potensi penerima manfaat — dari data yang sudah divalidasi. |
+| Export Report | Unduh ringkasan (peta + indikator kunci) sebagai PDF atau gambar. |
+
+## In-Scope vs Out-of-Scope (Bab 3 — supaya tidak over-engineer)
+
+**Jangan bangun (eksplisit out-of-scope):**
+- Network routing riil / jadwal transit / lalu lintas real-time — pakai estimasi jalan kaki saja
+- Survei okupansi skala kota penuh — pakai sampel jam puncak
+- Prediksi operasional KRL/BRT real-time
+- Aplikasi mobile native
+- Integrasi ticketing/pembayaran
+- Sistem manajemen user multi-role enterprise
+
+## Referensi Visual
+
+Wireframe/mockup dashboard resmi ada di lampiran PRD (Gambar 3) — sidebar nav: Dashboard, Peta Interaktif, Analisis Spasial, AI Spatial Consultant, Simulasi Skenario, Rekomendasi, Data & Laporan, Pengaturan. Dashboard utama berisi: ringkasan Kota Bekasi (populasi, kepadatan, luas, usia produktif, indeks aksesibilitas rata-rata), kartu Transit Desert count, kartu Usulan Halte Prioritas, kartu Potensi Penerima Manfaat, Top 3 Rekomendasi AI (skor dampak, potensi manfaat, estimasi biaya), dan panel Simulasi Skenario dengan dropdown pilihan skenario.
+
+## Jalur Kritis (lihat BUILD_CHECKLIST.md untuk urutan tugas)
+
+Hari ini: 24 Agustus 2026. Submission: **13 September 2026**.
+
+```
+29-30 Agu  Field Day 3 survei (terakhir, 70 titik total)
+31 Agu-6 Sep  Data processing (CAI, TDI, Equity Index dihitung)
+7-12 Sep   Development inti + AI + simulasi + deployment  ← HANYA 6 HARI, PALING BERISIKO
+13 Sep     Submission final
 ```
 
-**Belum ada test suite.** Verifikasi dilakukan lewat blok `__main__` di tiap script
-ETL, yang mencetak hasil perhitungan dengan data sintetis. `build_fishnet_grid.py`
-punya assertion konservasi populasi (total jiwa setelah disebar ke grid harus sama
-dengan total asli) — kalau mengubah logika disagregasi, assertion itu yang pertama
-menangkap kesalahan.
+**Strategi wajib:** bangun seluruh fitur dengan data sintetis/dummy MULAI SEKARANG, jangan tunggu 31 Agustus. Setiap komponen yang butuh data (peta, dashboard, AI panel) harus punya fallback ke data contoh kalau tabel Supabase masih kosong — supaya swap ke data asli nanti tinggal ganti sumber, bukan bangun dari nol di jendela 6 hari yang sempit.
 
-## Arsitektur
+## Hal yang perlu dicek di repo (dari review sebelumnya, mungkin sudah diperbaiki)
 
-### Prinsip inti: skor deterministik terpisah dari narasi AI
-
-Ini keputusan arsitektur paling penting di proyek ini, diminta eksplisit oleh PRD Bab 7
-dan menentukan di mana kode boleh ditulis:
-
-- **Semua skor dihitung offline** di Python (`etl/`), hasilnya diunggah ke Supabase
-  sebagai tabel siap pakai. Frontend hanya membaca, tidak pernah menghitung ulang.
-- **Gemini hanya menerjemahkan skor jadi narasi** — tidak pernah menghitung atau
-  menebak angka. `supabase/functions/ai-insight/index.ts` mengambil skor dari database
-  lebih dulu, mengirimkannya ke Gemini sebagai data terstruktur, lalu memvalidasi
-  bahwa angka di narasi cocok dengan angka input.
-- **Satu-satunya perhitungan on-the-fly** adalah RPC `simulate_new_stop(lat, lon)`
-  (`supabase/migrations/003_*.sql`), karena inputnya titik klik user yang tidak bisa
-  diketahui sebelumnya. Semua query spasialnya digabung dalam satu fungsi supaya cukup
-  satu round-trip.
-
-Jangan pindahkan perhitungan skor ke frontend atau ke prompt AI.
-
-### Alur data
-
-```
-data/raw + survei MAPID Apps
-    -> build_fishnet_grid.py      (grid 300m + disagregasi penduduk dasymetric)
-    -> compute_scores.py           (CAI per titik, TDI per grid, Equity per kelurahan)
-    -> upload_to_supabase.py       (push ke Supabase; butuh service_role key)
-    -> Supabase PostGIS + RLS
-    -> frontend React (baca lewat anon key) / Edge Function (baca lewat service_role)
-```
-
-### Tiga skor dan arah skalanya
-
-Arah skala berbeda antar skor dan mudah terbalik — perhatikan saat menulis query,
-pewarnaan peta, atau sorting:
-
-| Skor | Unit | Arah |
-|---|---|---|
-| `skor_cai` (Composite Accessibility Index) | per titik kandidat | **tinggi = aksesibilitas bagus** |
-| `skor_tdi` (Transit Desert Index) | per cell grid | **tinggi = makin "transit desert"**, makin butuh prioritas |
-| `skor_final` di `skor_equity` | per kelurahan | **tinggi = makin dirugikan/tertinggal** |
-
-`compute_equity_index()` membalik CAI (`inverse=True`) justru supaya konsisten dengan
-arah "tinggi = buruk" itu, dan `ranking` 1 berarti kelurahan paling tertinggal.
-
-### Pola dua fase untuk `grid_analisis`
-
-Kolom `geom` di tabel itu `NOT NULL`, jadi grid harus ada lebih dulu sebelum skornya bisa diisi:
-
-1. `build_fishnet_grid.insert_grid_to_supabase()` — **insert sekali**, mengisi geom.
-   Menghasilkan `id` yang dipakai sebagai `grid_analisis_id` di langkah berikutnya.
-2. `upload_to_supabase.upload_tdi_scores()` — **update berulang**, hanya mengisi kolom skor.
-   Kalau data tidak punya kolom `grid_analisis_id`, fungsi ini sengaja skip dengan
-   peringatan, bukan insert baris tanpa geom.
-
-Pola "skip dengan peringatan, jangan tulis data menggantung" juga dipakai di
-`upload_equity_scores()`, yang melewati kelurahan yang belum ada di `batas_administrasi`.
-
-### Mode demo di frontend
-
-`frontend/src/lib/supabaseClient.js` mengekspor `isConfigured`. Kalau `.env` belum diisi,
-`supabase` bernilai `null` dan **setiap komponen wajib punya fallback data contoh** —
-lihat pola `DEMO_*` di `AIPanel`, `Dashboard`, `EquityIndexView`, dan `App.jsx`. Ini
-disengaja supaya UI bisa dikerjakan dan didemokan tanpa menunggu backend siap. Komponen
-baru yang membaca Supabase harus mengikuti pola yang sama, termasuk badge peringatan
-"menampilkan data contoh".
-
-### RLS
-
-`002_rls_policies.sql`: publik (anon key) hanya boleh `SELECT`. Tidak ada policy
-INSERT/UPDATE/DELETE sama sekali — semua penulisan lewat `service_role` key yang
-dipakai script ETL dan Edge Function. Tabel baru harus ditambahkan policy select-nya
-secara eksplisit satu per satu (bukan wildcard), mengikuti pola yang sudah ada.
-
-## Status: apa yang masih placeholder
-
-Banyak bagian sengaja dibiarkan placeholder dan **tidak boleh dianggap final**:
-
-- **Semua loader data masih `load_demo_*()`** dengan data sintetis. Data asli
-  (BPS/Dukcapil, OSM building footprint, Dapodik, Kemenkes, dataset panitia MAPID)
-  belum ada di `data/raw/`. Window ETL data asli: 31 Agu–6 Sep 2026.
-- **Semua bobot masih placeholder** (`DEFAULT_WEIGHTS`, `DEFAULT_MOBILITY_WEIGHTS`,
-  `DEFAULT_EQUITY_WEIGHTS`), menunggu sesi AHP dengan mentor. Bobot final nantinya
-  dibaca dari tabel `konfigurasi_bobot`, bukan hardcode.
-- **Basemap masih raster OSM gratis**, bukan MAPID Maps yang diwajibkan kompetisi.
-  Cari komentar `GANTI DI SINI` di `frontend/src/components/Map/MapView.jsx`.
-- `area_filter` di Edge Function `ai-insight` masih TODO — query pengguna belum
-  benar-benar memfilter data per kecamatan.
-- `disaggregate_population_dasymetric()` pakai loop bersarang yang mudah dibaca tapi
-  lambat; untuk skala kota penuh perlu diganti `gpd.sjoin()` + `groupby`.
-
-## Catatan lingkungan
-
-- **Jangan pakai emoji di `print()` script Python.** Console Windows default memakai
-  cp1252 dan akan `UnicodeEncodeError` — pernah terjadi dan sudah diperbaiki; pakai
-  penanda teks seperti `[PERINGATAN]`.
-- `data/processed/` di-gitignore (output generate ulang). `data/raw/` dan `data/survei/`
-  sengaja ikut repo supaya analisis bisa direproduksi tim.
-- Proyeksi: simpan/serve geometri di **EPSG:4326**, tapi reproyeksi ke **EPSG:32748
-  (UTM 48S)** untuk operasi berbasis meter (ukuran cell grid, luas, jarak).
-- `origin` adalah fork pribadi (`Agentsae/mbg-map-id`); repo tim ada di `upstream`
-  (`rafaelwilliem/mbg-map-id`).
-
-## Dokumen rujukan
-
-- `FRAMEWORK_GeoTransitInsight.md` — framework teknis: arsitektur, skema database,
-  roadmap, pembagian kerja, tabel risiko.
-- `README.md` — cara menjalankan starter kit dan langkah setelah kredensial siap.
-- **PRD (`PRD_GeoTransitInsight.docx`) tidak ada di repo** — dokumen itu memuat
-  problem statement, persona, acceptance criteria per fitur, dan timeline resmi.
-  Kalau butuh detailnya, minta filenya ke user.
-
-Gap yang sudah teridentifikasi antara PRD dan kode saat ini: PRD Bab 9 menyebut
-**Leaflet** padahal kode memakai **MapLibre GL JS** (PRD yang perlu dikoreksi);
-acceptance criteria "Export Report" (PDF/gambar), "kelompok penduduk terdampak" dan
-"rekomendasi intervensi per kelurahan" di Equity Dashboard, serta filter per kecamatan
-di peta belum ada implementasinya.
+- `README.md` dan `.gitignore` sempat punya conflict marker git yang ter-commit — cek sudah bersih atau belum
+- RLS (Row Level Security) di Supabase — pastikan aktif di semua tabel, publik hanya boleh baca
+- `.env` — pastikan tidak ada `ANTHROPIC_API_KEY` dengan prefix `VITE_` (akan ter-bundel ke frontend publik); gunakan `ANTHROPIC_API_KEY` sebagai Supabase secret, bukan `.env` frontend

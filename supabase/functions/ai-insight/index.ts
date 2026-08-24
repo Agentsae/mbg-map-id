@@ -2,20 +2,25 @@
 // GeoTransit Insight — Tim MBG
 //
 // Deploy: supabase functions deploy ai-insight
-// Set secret: supabase secrets set GEMINI_API_KEY=xxxxx
+// Set secret: supabase secrets set ANTHROPIC_API_KEY=sk-ant-xxxxx
 //
-// Alur (lihat FRAMEWORK_GeoTransitInsight.md Bagian 6):
+// Alur (lihat CLAUDE.md):
 //   1. Terima { query, area_filter } dari frontend
 //   2. Query skor_cai/skor_equity dari Supabase (skor sudah pasti, dihitung offline)
-//   3. Kirim skor tsb ke Gemini API, minta narasi
+//   3. Kirim skor tsb ke Claude API, minta narasi
 //   4. Validasi: angka di narasi harus cocok dengan angka input
 //   5. Kembalikan { narasi, ranking } ke frontend
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 
-const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
+const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY");
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+
+// Model cepat & murah — cocok untuk tugas narasi ringkas dengan target
+// acceptance criteria PRD "< 5 detik". Naikkan ke claude-sonnet-5 kalau
+// butuh kualitas interpretasi yang lebih dalam (trade-off: lebih lambat).
+const MODEL = "claude-haiku-4-5-20251001";
 
 Deno.serve(async (req) => {
   try {
@@ -24,11 +29,14 @@ Deno.serve(async (req) => {
     if (!query) {
       return new Response(JSON.stringify({ error: "Field 'query' wajib diisi" }), { status: 400 });
     }
+    if (!ANTHROPIC_API_KEY) {
+      return new Response(JSON.stringify({ error: "ANTHROPIC_API_KEY belum diset sebagai secret" }), { status: 500 });
+    }
 
     const supabase = createClient(SUPABASE_URL!, SUPABASE_SERVICE_ROLE_KEY!);
 
-    // 1. Ambil skor yang sudah dihitung offline — JANGAN pernah minta Gemini
-    //    menghitung/menebak angka ini sendiri.
+    // 1. Ambil skor yang sudah dihitung offline — Claude hanya boleh
+    //    MENJELASKAN angka ini, tidak boleh menghitung/menebak sendiri.
     let queryBuilder = supabase
       .from("skor_equity")
       .select("skor_final, ranking, batas_administrasi(nama_kelurahan)")
@@ -43,15 +51,13 @@ Deno.serve(async (req) => {
     if (!skorRows || skorRows.length === 0) {
       return new Response(
         JSON.stringify({
-          narasi: "Data skor belum tersedia — jalankan etl/compute_scores.py dan upload_to_supabase.py terlebih dahulu.",
+          narasi: "Data skor belum tersedia — jalankan pipeline compute_scores lalu upload ke Supabase terlebih dahulu.",
           ranking: [],
         }),
         { headers: { "Content-Type": "application/json" } }
       );
     }
 
-    // 2. Susun prompt terstruktur — Gemini hanya boleh MENJELASKAN angka ini,
-    //    tidak boleh menambah/mengubahnya (lihat instruksi system prompt).
     const promptData = skorRows.map((r: any) => ({
       kelurahan: r.batas_administrasi?.nama_kelurahan,
       skor_equity: r.skor_final,
@@ -64,36 +70,41 @@ pejabat non-teknis, sertakan alasan berbasis angka yang diberikan.
 JANGAN mengubah, membulatkan berlebihan, atau menambah angka apa pun di luar data ini.
 Jawab dalam Bahasa Indonesia, maksimal 4 kalimat.`;
 
-    const geminiRes = await fetch(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" +
-        GEMINI_API_KEY,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [
-                { text: systemPrompt + "\n\nPertanyaan pengguna: " + query },
-                { text: "Data skor:\n" + JSON.stringify(promptData, null, 2) },
-              ],
-            },
-          ],
-        }),
-      }
-    );
+    // Claude Messages API — lihat https://docs.claude.com/en/api/messages
+    const claudeRes = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "x-api-key": ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        max_tokens: 512,
+        system: systemPrompt,
+        messages: [
+          {
+            role: "user",
+            content:
+              `Pertanyaan pengguna: ${query}\n\n` +
+              `Data skor:\n${JSON.stringify(promptData, null, 2)}`,
+          },
+        ],
+      }),
+    });
 
-    if (!geminiRes.ok) {
-      const errText = await geminiRes.text();
-      throw new Error(`Gemini API error: ${geminiRes.status} ${errText}`);
+    if (!claudeRes.ok) {
+      const errText = await claudeRes.text();
+      throw new Error(`Claude API error: ${claudeRes.status} ${errText}`);
     }
 
-    const geminiJson = await geminiRes.json();
-    const narasi = geminiJson.candidates?.[0]?.content?.parts?.[0]?.text ?? "(tidak ada respons)";
+    const claudeJson = await claudeRes.json();
+    // Messages API mengembalikan content sebagai array block, ambil block bertipe "text"
+    const narasi =
+      claudeJson.content?.find((b: any) => b.type === "text")?.text ?? "(tidak ada respons)";
 
-    // 3. Validasi sederhana: pastikan tidak ada angka aneh yang tidak
-    //    muncul di data asli (cek dasar, bukan jaminan penuh — lihat
-    //    framework Bagian 6 untuk pengembangan validasi lebih ketat)
+    // 2. Validasi sederhana: pastikan tidak ada angka aneh yang tidak
+    //    muncul di data asli (cek dasar, bukan jaminan penuh)
     const skorValues = promptData.map((d) => d.skor_equity.toString());
     const containsKnownScore = skorValues.some((v) => narasi.includes(v));
     if (!containsKnownScore) {
@@ -109,6 +120,10 @@ Jawab dalam Bahasa Indonesia, maksimal 4 kalimat.`;
     );
   } catch (err) {
     console.error(err);
-    return new Response(JSON.stringify({ error: String(err) }), { status: 500 });
+    // err bisa berupa Error biasa, atau object error mentah dari Supabase
+    // (mis. PostgrestError) — String(err) pada object polos menghasilkan
+    // "[object Object]" yang tidak berguna, jadi ambil .message kalau ada.
+    const message = err instanceof Error ? err.message : JSON.stringify(err);
+    return new Response(JSON.stringify({ error: message }), { status: 500 });
   }
 });

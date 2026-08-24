@@ -1,70 +1,72 @@
-# GeoTransit Insight — Starter Kit
+# GeoTransit Insight — Tim MBG (MassTransit Based Geoinsight)
 
-Tim MBG (MassTransit Based Geoinsight) — MAPID WebGIS Competition 2026
+**Spatial Decision Support System (SDSS) berbasis AI** untuk optimalisasi layanan transportasi massal Kota Bekasi.
+Dibangun di atas **MAPID Maps** & **GEO MAPID** untuk kompetisi **MAPID WebGIS Competition 2026** (Top 50).
 
-Ini adalah kerangka kerja awal yang sudah bisa dijalankan hari ini, sesuai
-prioritas minggu pertama di `FRAMEWORK_GeoTransitInsight.md`. Semua bagian
-sudah teruji jalan (frontend `npm run build` sukses, formula CAI di
-`compute_scores.py` sudah diverifikasi hasilnya benar), tapi masih perlu
-disambungkan ke kredensial asli (Supabase, Gemini, MAPID Maps).
+## 👥 Tim
+| Nama | Peran |
+|---|---|
+| Rafael Williem | Project Leader |
+| Galuh Eka Permana | WebGIS Developer |
+| Samuel Alfa Edison | Data & AI Analyst |
+| Fajar Firman Firdaus | UI/UX Designer |
+| Muhamad Febrian | Business / Product Analyst |
 
-## Struktur
+## 🎯 Tujuan
+Mengubah keputusan penempatan halte/titik transit dari berbasis intuisi menjadi berbasis data spasial & AI:
+- **Peta Gap Analysis** — visualisasi kesenjangan layanan transit.
+- **AI Spatial Consultant** — rekomendasi prioritas + narasi kuantitatif (LLM sebagai interpreter model spasial, bukan penentu).
+- **Simulasi What-If** — dampak penambahan titik layanan sebelum dibangun.
 
+## 🧱 Stack (sesuai ketentuan kompetisi — open source)
+- **Frontend:** React + Vite + MapLibre GL JS
+- **Backend/Database:** Supabase (PostgreSQL + PostGIS), Edge Functions
+- **AI Layer:** Claude API (Messages API, `claude-haiku-4-5-20251001`) dipanggil dari Supabase Edge Function (bukan dari frontend)
+- **Data & Analisis Spasial:** QGIS, Python (GeoPandas, scikit-learn, pyproj, fiona)
+- **Metodologi:** CAI (Weighted Linear Combination), TDI, Transit Equity Index, dasymetric mapping (grid 250–500 m)
+
+## 📁 Struktur
 ```
-geotransit-starter/
-├── frontend/            # React + Vite + MapLibre GL JS + Tailwind
+mbg-webgis/
+├── README.md
+├── requirements.txt        # dependency Python (data/AI)
+├── .gitignore
+├── data/
+│   ├── raw/                # data mentah hasil unduh/ekspor (di-ignore)
+│   └── processed/          # hasil olahan (grid, indeks)
+├── src/                    # React app (frontend)
 ├── supabase/
-│   ├── migrations/      # SQL: skema tabel, RLS, RPC simulate_new_stop
-│   └── functions/
-│       └── ai-insight/  # Edge Function TypeScript, panggil Gemini API
-└── etl/
-    ├── compute_scores.py      # Formula CAI (weighted overlay) — SUDAH JALAN, ada demo
-    └── upload_to_supabase.py  # Template upload hasil ke Supabase
+│   ├── migrations/         # skema tabel, RLS, RPC
+│   └── functions/          # Edge Functions (ai-insight, dst)
+└── webgis/                 # aset integrasi MAPID Maps tambahan
 ```
 
-## Yang SUDAH bisa dicoba sekarang (tanpa kredensial apa pun)
+## ⚙️ Setup (lokal)
 
+Frontend:
 ```bash
-# 1. Lihat formula CAI bekerja dengan data contoh
-cd etl
-pip install pandas numpy
-python compute_scores.py
-
-# 2. Jalankan frontend dalam mode demo (semua panel tampil dengan data contoh)
-cd ../frontend
 npm install
 npm run dev
-# buka http://localhost:5173 — akan ada badge "Mode demo" karena .env belum diisi
 ```
 
-Frontend sengaja dibuat begini: **jalan dulu dengan data contoh**, supaya
-Fajar (UI/UX) dan siapa pun di tim bisa langsung lihat & kasih masukan
-tampilan tanpa menunggu Supabase/data survei selesai. Begitu `.env` diisi
-kredensial asli, badge demo otomatis hilang dan semua panel mulai
-menampilkan data sungguhan.
+Python (data & AI):
+```bash
+python -m venv .venv && source .venv/Scripts/activate   # Windows
+pip install -r requirements.txt
+```
 
-## Langkah setelah kredensial siap
+> **Penting:** API key & konfigurasi disimpan di **backend/Edge Function**, jangan pernah pakai prefix `VITE_` untuk key rahasia (Anthropic, service role) — itu akan ter-bundel ke JS publik. Lihat `.env.example` dan `.gitignore`.
 
-1. **Supabase**: buat project baru, jalankan tiga file di `supabase/migrations/`
-   lewat SQL Editor (urutannya penting: 001 → 002 → 003).
-2. **Frontend**: `cp frontend/.env.example frontend/.env`, isi
-   `VITE_SUPABASE_URL` dan `VITE_SUPABASE_ANON_KEY` dari Supabase Dashboard.
-3. **Edge Function**: `supabase functions deploy ai-insight`, lalu
-   `supabase secrets set GEMINI_API_KEY=xxxxx`.
-4. **ETL**: isi `SUPABASE_URL` dan `SUPABASE_SERVICE_ROLE_KEY` sebagai
-   environment variable, lalu `python upload_to_supabase.py` untuk push
-   skor pertama ke database.
-5. **MAPID Maps** ⚠️: `frontend/src/components/Map/MapView.jsx` masih
-   pakai basemap OSM placeholder gratis. Cari komentar `GANTI DI SINI`
-   di file itu begitu format tile MAPID Maps sudah dikonfirmasi.
+## 📌 Milestone
+- Survei lapangan: 7–20 Agu 2026
+- Pengolahan data + AHP: 14–27 Agu 2026
+- AI Spatial Consultant & WebGIS: 21 Agu–5 Sep 2026
+- UI/UX final: 1–10 Sep 2026
+- PRD final: 5–13 Sep 2026
+- **Submission final: 14 Sep 2026**
 
-## Belum dikerjakan di starter kit ini (langkah selanjutnya)
-
-- ETL data asli (`load_penduduk.py`, `load_poi.py`, dll masih perlu ditulis
-  begitu data BPS/Dapodik/Kemenkes/RTRW sudah diunduh)
-- Fishnet grid untuk `grid_analisis` (Transit Desert Index)
-- Bobot AHP final (masih pakai `DEFAULT_WEIGHTS` sementara di `compute_scores.py`)
-- Deploy ke Vercel (jalankan `vercel` dari folder `frontend/` setelah akun siap)
-
-Lihat `FRAMEWORK_GeoTransitInsight.md` untuk roadmap lengkap dan pembagian
-kerja Python vs TypeScript antar anggota tim.
+## 📄 Dokumen
+- PRD: `PRD_GeoTransitInsight-2.docx`
+- Proposal: `MBG_GeoTransitInsight-2.pdf`
+- Notulen TM I: `Notulen tech meet revisi.pdf`
+- Framework teknis: `FRAMEWORK_GeoTransitInsight.md`
