@@ -34,6 +34,7 @@ Catatan penting soal TDI & Equity Index (beda dengan CAI):
 
 import os
 import sys
+from dotenv import load_dotenv
 from supabase import create_client
 from compute_scores import (
     compute_cai,
@@ -49,6 +50,7 @@ from compute_scores import (
 
 
 def get_client():
+    load_dotenv()  # baca etl/.env kalau ada — lihat komentar setup di atas
     url = os.environ.get("SUPABASE_URL")
     key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
     if not url or not key:
