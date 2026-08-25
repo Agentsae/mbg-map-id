@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { BarChart3 } from 'lucide-react'
+import { BarChart3, MapPinOff, Users } from 'lucide-react'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
 import { supabase, isConfigured } from '../../lib/supabaseClient'
 
@@ -14,9 +14,28 @@ const DEMO_DATA = [
   { kecamatan: 'Mustika Jaya', coverage: 22 },
 ]
 
+// Grid dengan skor_aksesibilitas_transit di bawah ambang ini dianggap
+// "transit desert" untuk keperluan tampilan kartu ringkasan.
+// TODO(data-ai-analyst): konfirmasi ambang resmi (bisa jadi ambang berbeda
+// per rentang skor_tdi, bukan skor_aksesibilitas_transit tunggal) —
+// nilai 0.3 di bawah ini hanya placeholder tampilan, BUKAN definisi final
+// Transit Desert Index.
+const TRANSIT_DESERT_THRESHOLD = 0.3
+
+// Kartu ringkasan contoh — dipakai kalau Supabase belum tersambung/tabel
+// grid_analisis masih kosong.
+const DEMO_TRANSIT_DESERT_COUNT = 18
+const DEMO_POTENSI_PENERIMA_MANFAAT = 42500
+
 export default function Dashboard() {
   const [data, setData] = useState(DEMO_DATA)
   const [usingDemo, setUsingDemo] = useState(!isConfigured)
+
+  const [transitDesertCount, setTransitDesertCount] = useState(DEMO_TRANSIT_DESERT_COUNT)
+  const [usingDemoDesert, setUsingDemoDesert] = useState(!isConfigured)
+
+  const [potensiPenerimaManfaat, setPotensiPenerimaManfaat] = useState(DEMO_POTENSI_PENERIMA_MANFAAT)
+  const [usingDemoPenerima, setUsingDemoPenerima] = useState(!isConfigured)
 
   useEffect(() => {
     if (!isConfigured) return
@@ -31,8 +50,45 @@ export default function Dashboard() {
           setUsingDemo(true)
           return
         }
-        // TODO: agregasi asli per kecamatan — ini masih placeholder logic
+        // TODO(data-ai-analyst): agregasi coverage ratio asli per kecamatan
+        // belum diimplementasikan di sini — sengaja tetap tandai sebagai
+        // "usingDemo" (bukan bug) supaya UI tidak diam-diam menampilkan
+        // DEMO_DATA seolah-olah itu data asli begitu Supabase tersambung.
         setData(DEMO_DATA)
+        setUsingDemo(true)
+      })
+
+    // Jumlah transit desert teridentifikasi: hitung grid dengan skor
+    // aksesibilitas transit di bawah ambang. Ini murni filter/count atas
+    // skor_aksesibilitas_transit yang SUDAH dihitung data-ai-analyst — tidak
+    // ada formula CAI/TDI yang dihitung ulang di sini.
+    supabase
+      .from('grid_analisis')
+      .select('id, kepadatan_penduduk, skor_aksesibilitas_transit')
+      .lt('skor_aksesibilitas_transit', TRANSIT_DESERT_THRESHOLD)
+      .then(({ data: rows, error }) => {
+        if (error || !rows) {
+          setUsingDemoDesert(true)
+          return
+        }
+        setTransitDesertCount(rows.length)
+        setUsingDemoDesert(false)
+
+        // Potensi penerima manfaat: agregasi kepadatan_penduduk pada grid
+        // yang teridentifikasi sebagai transit desert, sebagai proksi kasar
+        // jumlah penduduk yang berpotensi diuntungkan bila desert ini
+        // ditangani. Ini penjumlahan kolom mentah, bukan formula baru.
+        // TODO(data-ai-analyst): ganti dengan agregasi jumlah_penduduk
+        // (headcount) yang lebih akurat lewat join spasial ke tabel
+        // `penduduk`, idealnya lewat RPC khusus — kepadatan_penduduk di
+        // grid_analisis adalah rasio per luas grid, bukan headcount langsung.
+        if (rows.length) {
+          const totalKepadatan = rows.reduce((sum, r) => sum + (r.kepadatan_penduduk ?? 0), 0)
+          setPotensiPenerimaManfaat(Math.round(totalKepadatan))
+          setUsingDemoPenerima(false)
+        } else {
+          setUsingDemoPenerima(true)
+        }
       })
   }, [])
 
@@ -49,6 +105,23 @@ export default function Dashboard() {
         </div>
       )}
 
+      <div className="px-4 pt-4 grid grid-cols-2 gap-3">
+        <StatCard
+          icon={MapPinOff}
+          label="Transit Desert Teridentifikasi"
+          value={transitDesertCount.toLocaleString('id-ID')}
+          unit="grid"
+          usingDemo={usingDemoDesert}
+        />
+        <StatCard
+          icon={Users}
+          label="Potensi Penerima Manfaat"
+          value={potensiPenerimaManfaat.toLocaleString('id-ID')}
+          unit="jiwa (estimasi)"
+          usingDemo={usingDemoPenerima}
+        />
+      </div>
+
       <div className="p-4 flex-1">
         <p className="text-sm text-slate-500 mb-3">
           Coverage ratio (%) penduduk terlayani transit per kecamatan
@@ -63,6 +136,30 @@ export default function Dashboard() {
           </BarChart>
         </ResponsiveContainer>
       </div>
+    </div>
+  )
+}
+
+// TODO(ui-ux-designer): kartu ringkasan ini masih styling generik (belum
+// disesuaikan dengan sistem kartu resmi mockup PRD Gambar 3) — asumsi wajar
+// dipakai dulu supaya data sudah tampil.
+function StatCard({ icon: Icon, label, value, unit, usingDemo }) {
+  return (
+    <div className="bg-white border border-slate-200 rounded-lg p-3 relative">
+      <div className="flex items-center gap-2 text-slate-400 mb-1">
+        <Icon size={14} />
+        <span className="text-[11px] font-medium uppercase tracking-wide">{label}</span>
+      </div>
+      <p className="text-2xl font-bold text-slate-800 leading-tight">{value}</p>
+      <p className="text-[11px] text-slate-400">{unit}</p>
+      {usingDemo && (
+        <span
+          title="Menampilkan data contoh — sambungkan grid_analisis untuk data asli"
+          className="absolute top-2 right-2 text-[9px] bg-amber-50 text-amber-700 border border-amber-200 rounded px-1.5 py-0.5"
+        >
+          demo
+        </span>
+      )}
     </div>
   )
 }

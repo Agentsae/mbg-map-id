@@ -13,8 +13,8 @@ Checklist ini bukan pengganti PRD — kalau ada perbedaan, PRD (Bab 8, acceptanc
 
 - [x] ~~Putuskan: MapLibre GL JS atau Leaflet~~ → **MapLibre GL JS** (selesai 24 Agu)
 - [x] ~~Putuskan: Claude AI atau Gemini~~ → **Claude API**, model `claude-haiku-4-5-20251001` (selesai 24 Agu)
-- [ ] 🔴 Cek repo: `README.md`/`.gitignore` bebas conflict marker git, RLS aktif di Supabase, tidak ada API key ter-expose di `.env` frontend
-- [ ] 🟢 Setup skema tabel Supabase (batas_administrasi, penduduk, poi, halte_eksisting, titik_kandidat, grid_analisis, skor_cai, skor_equity) — bisa jalan dengan skema kosong, diisi data asli belakangan
+- [x] 🔴 Cek repo: `README.md`/`.gitignore` bebas conflict marker git, RLS aktif di Supabase, tidak ada API key ter-expose di `.env` frontend — diverifikasi 25 Agu: `README.md`/`.gitignore` bersih, `002_rls_policies.sql` mengaktifkan RLS + policy baca-publik di 9/9 tabel tanpa policy insert/update/delete untuk anon, tidak ada `VITE_ANTHROPIC_API_KEY` di manapun (`.env.example` eksplisit memperingatkan, `ai-insight/index.ts` baca dari `Deno.env`)
+- [x] 🟢 Setup skema tabel Supabase (batas_administrasi, penduduk, poi, halte_eksisting, titik_kandidat, grid_analisis, skor_cai, skor_equity) — bisa jalan dengan skema kosong, diisi data asli belakangan — diverifikasi 25 Agu: `001_init_tables.sql` berisi 9 tabel (8 di atas + `konfigurasi_bobot`), lengkap dengan index GIST geometri
 
 ## Fase 1 — Fondasi frontend (paralel dengan survei, 🟢 semua)
 
@@ -22,12 +22,12 @@ Checklist ini bukan pengganti PRD — kalau ada perbedaan, PRD (Bab 8, acceptanc
 - [ ] Peta dasar tampil dengan basemap MAPID Maps + kontrol layer (zoom, pilih layer, legenda)
 - [ ] Card ringkasan Kota Bekasi (populasi, kepadatan, luas, usia produktif) — angka ini SUDAH FINAL dari PRD Bab 1, tidak perlu tunggu survei: 2.595.927 jiwa, 12.333 jiwa/km², 210,49 km², 70,99%
 - [ ] Kerangka Dashboard Indikator (coverage ratio, jumlah transit desert, potensi penerima manfaat) dengan data dummy
-- [ ] Kerangka panel AI Spatial Consultant (chat UI) dengan respons dummy/hardcoded dulu
+- [x] Kerangka panel AI Spatial Consultant (chat UI) dengan respons dummy/hardcoded dulu — diverifikasi 25 Agu: `AIPanel.jsx` punya chat UI lengkap (input, riwayat pesan, ranking list) dan fallback `DEMO_RESPONSE` saat Supabase belum tersambung
 - [ ] Kerangka panel Simulasi Skenario (dropdown pilih skenario + tombol "Lihat Hasil Simulasi") sesuai mockup
 
 ## Fase 2 — Logika inti (🟢 bisa mulai dengan data sintetis)
 
-- [ ] Formula Composite Accessibility Index (weighted overlay) — implementasi + uji dengan 4-5 titik data buatan sendiri dulu
+- [x] Formula Composite Accessibility Index (weighted overlay) — implementasi + uji dengan 4-5 titik data buatan sendiri dulu — diverifikasi 25 Agu: `etl/compute_scores.py` `compute_cai()` + `sensitivity_check()` jalan dengan 4 titik data sintetis (`load_demo_data()`)
 - [ ] Endpoint/RPC `simulate_new_stop` — hitung penduduk terlayani radius 400m/800m dari data sintetis
 - [ ] Klik lokasi di peta → panel rincian skor per kriteria muncul (acceptance criteria: bukan angka tunggal)
 - [ ] Cek kecepatan: filter peta per kecamatan **< 2 detik**, simulasi **< 3 detik** — uji dari awal dengan data dummy, jangan tunggu data asli untuk sadar ada masalah performa

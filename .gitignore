@@ -55,8 +55,8 @@ data/raw/
 *.prj
 *.cpg
 *.geojson
-# keep small processed exports if needed — uncomment untuk ignore semua:
-# data/processed/*.geojson
+# data olahan (kecil, sintetis) tetap di-track supaya tidak hilang dari version control
+!data/processed/*.geojson
 
 # ===== Logs =====
 *.log

@@ -229,6 +229,12 @@ def compute_equity_index(df: pd.DataFrame, weights: dict = None) -> pd.DataFrame
     sengaja disamakan dengan skema tabel skor_equity di 001_init_tables.sql
     supaya siap diupload langsung via upload_to_supabase.py.
 
+    Kolom opsional 'kelompok_terdampak' dan 'rekomendasi_intervensi' (skema
+    005_equity_kelompok_rekomendasi.sql), kalau ada di df input, dibawa
+    apa adanya (pass-through, lewat df.copy() di awal fungsi ini) — bukan
+    dihitung dari formula, karena keduanya narasi deskriptif hasil analisis
+    tim, bukan skor numerik.
+
     Catatan skala: skor_final di sini adalah SKOR KETIMPANGAN (equity gap),
     bukan skor akses — semakin TINGGI skor_final, semakin dirugikan/tertinggal
     kelurahan tsb (konsisten dengan EquityIndexView.jsx di frontend). Jarak ke
@@ -300,7 +306,16 @@ def load_demo_grid_data() -> pd.DataFrame:
 
 def load_demo_equity_data() -> pd.DataFrame:
     """Data kelurahan sintetis untuk demo Transit Equity Index — GANTI dengan
-    hasil agregasi skor_cai per kelurahan (spatial join ke batas_administrasi)."""
+    hasil agregasi skor_cai per kelurahan (spatial join ke batas_administrasi).
+
+    kelompok_terdampak & rekomendasi_intervensi (kolom skor_equity, lihat
+    migration 005_equity_kelompok_rekomendasi.sql) TIDAK dihitung dari
+    formula — ini isian deskriptif hasil analisis tim/mentor per kelurahan,
+    dibawa apa adanya (pass-through) oleh compute_equity_index() supaya
+    langsung siap diupload lewat upload_to_supabase.upload_equity_scores().
+    Nilai di bawah ini masih CONTOH/DUMMY, ganti begitu ada analisis kerentanan
+    sosial yang tervalidasi per kelurahan (PRD Bab 8, Transit Equity Index
+    Dashboard: "kelompok terdampak" + "1 rekomendasi intervensi")."""
     return pd.DataFrame({
         "nama_kelurahan": [
             "Mustika Jaya",
@@ -315,6 +330,20 @@ def load_demo_equity_data() -> pd.DataFrame:
         "jarak_rata2_pendidikan_m": [1100, 950, 900, 700, 350],
         "jarak_rata2_kesehatan_m": [1800, 1600, 1400, 1000, 500],
         "jarak_rata2_kerja_m": [2500, 2100, 1900, 1300, 600],
+        "kelompok_terdampak": [
+            ["lansia", "anak sekolah", "pekerja informal"],
+            ["pekerja informal", "anak sekolah"],
+            ["lansia", "ibu dan balita"],
+            ["pekerja komuter", "anak sekolah"],
+            ["pekerja industri"],
+        ],
+        "rekomendasi_intervensi": [
+            "Prioritaskan halte baru dalam radius 400m dari permukiman padat di Mustika Jaya, dekat sentra industri.",
+            "Sediakan jalur pejalan kaki aman dan halte dekat kawasan TPST Bantar Gebang untuk pekerja informal.",
+            "Tambahkan armada feeder dari permukiman padat Rawa Lumbu menuju simpul transit terdekat.",
+            "Tingkatkan headway pada koridor menuju Bekasi Utara pada jam sibuk pagi dan sore.",
+            "Pertahankan kualitas layanan eksisting; fokuskan investasi baru ke kelurahan dengan skor equity lebih rendah.",
+        ],
     })
 
 

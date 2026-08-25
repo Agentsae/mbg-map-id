@@ -6,22 +6,40 @@ import 'maplibre-gl/dist/maplibre-gl.css'
 const BEKASI_CENTER = [107.0074, -6.2185]
 const BEKASI_ZOOM = 12
 
-// ⚠️ PLACEHOLDER BASEMAP — pakai raster OSM gratis, tanpa API key, supaya
-// skeleton ini langsung bisa dijalankan hari ini. GANTI dengan basemap
-// MAPID Maps begitu format tile URL/API key-nya dikonfirmasi (lihat
-// FRAMEWORK_GeoTransitInsight.md Bagian 1 & 10). Cari komentar "GANTI DI SINI"
-// di bawah untuk lokasi persis yang perlu diedit.
-const PLACEHOLDER_STYLE = {
+// MAPID Maps GL Style — dari Map Services > Styles > Styles Privat (GL Style)
+// Dua bagian dipisah env var supaya gampang ganti style (street-2d-building /
+// basic / dst) tanpa menyentuh key, dan sebaliknya.
+const MAPID_STYLE_BASE = import.meta.env.VITE_MAPID_MAPS_STYLE_URL
+const MAPID_API_KEY = import.meta.env.VITE_MAPID_MAPS_API_KEY
+
+// Fallback ke OSM raster gratis kalau .env belum diisi — supaya dev lokal
+// tetap bisa jalan tanpa key sambil menunggu konfirmasi/kuota MAPID.
+const FALLBACK_STYLE = {
   version: 8,
   sources: {
     osm: {
       type: 'raster',
       tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
       tileSize: 256,
-      attribution: '© OpenStreetMap contributors — GANTI ke MAPID Maps sebelum submission',
+      attribution: '© OpenStreetMap contributors — mode fallback, MAPID Maps belum dikonfigurasi',
     },
   },
   layers: [{ id: 'osm-basemap', type: 'raster', source: 'osm' }],
+}
+
+// MapLibre menerima "style" berupa URL string (akan di-fetch otomatis) atau
+// objek style JSON langsung. Kalau kredensial MAPID ada, pakai URL asli;
+// kalau belum, pakai objek fallback di atas.
+const mapStyle =
+  MAPID_STYLE_BASE && MAPID_API_KEY
+    ? `${MAPID_STYLE_BASE}?key=${MAPID_API_KEY}`
+    : FALLBACK_STYLE
+
+if (!(MAPID_STYLE_BASE && MAPID_API_KEY)) {
+  console.warn(
+    '[GeoTransit Insight] VITE_MAPID_MAPS_STYLE_URL / VITE_MAPID_MAPS_API_KEY belum diisi — ' +
+    'basemap memakai OSM fallback, bukan MAPID Maps resmi.'
+  )
 }
 
 /**
@@ -45,7 +63,7 @@ export default function MapView({ simulationMode = false, onMapClick, markers = 
 
     mapRef.current = new MapLibreMap({
       container: containerRef.current,
-      style: PLACEHOLDER_STYLE, // GANTI DI SINI: ganti PLACEHOLDER_STYLE dengan style/tile URL MAPID Maps
+      style: mapStyle,
       center: BEKASI_CENTER,
       zoom: BEKASI_ZOOM,
     })
@@ -94,8 +112,7 @@ export default function MapView({ simulationMode = false, onMapClick, markers = 
       el.style.boxShadow = '0 1px 3px rgba(0,0,0,0.4)'
       el.style.background = m.color || '#1B659D'
 
-      const marker = new Marker({ element: el })
-        .setLngLat([m.lon, m.lat])
+      const marker = new Marker({ element: el }).setLngLat([m.lon, m.lat])
 
       if (m.popupText) {
         marker.setPopup(new Popup({ offset: 12 }).setText(m.popupText))

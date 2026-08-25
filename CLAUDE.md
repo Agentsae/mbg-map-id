@@ -83,7 +83,22 @@ Hari ini: 24 Agustus 2026. Submission: **13 September 2026**.
 
 **Strategi wajib:** bangun seluruh fitur dengan data sintetis/dummy MULAI SEKARANG, jangan tunggu 31 Agustus. Setiap komponen yang butuh data (peta, dashboard, AI panel) harus punya fallback ke data contoh kalau tabel Supabase masih kosong — supaya swap ke data asli nanti tinggal ganti sumber, bukan bangun dari nol di jendela 6 hari yang sempit.
 
-## Hal yang perlu dicek di repo (dari review sebelumnya, mungkin sudah diperbaiki)
+## Subagents — pembagian kerja 5 peran PRD lewat Claude Code
+
+Proyek ini dikerjakan solo (Sam), tapi PRD mendefinisikan 5 peran. Untuk menjaga struktur dan mempercepat kerja, 5 peran itu dipetakan jadi subagent di `.claude/agents/`. **Delegasikan secara eksplisit berdasarkan jenis tugas:**
+
+- Tugas peta/komponen React/wiring Supabase di frontend → gunakan agent `webgis-developer`
+- Tugas formula CAI/TDI/Equity Index, migration SQL, ETL Python, Edge Function AI → gunakan agent `data-ai-analyst`
+- Tugas styling/tampilan/kesesuaian dengan mockup resmi → gunakan agent `ui-ux-designer`
+- Tugas cek acceptance criteria, sinkronisasi PRD/dokumen, narasi non-teknis → gunakan agent `product-analyst`
+- Tugas orientasi awal sesi, cek jalur kritis timeline, audit kebersihan repo → gunakan agent `project-lead`
+- Tugas menjalankan/mengukur langsung (build, performa, kebenaran angka, regresi) → gunakan agent `qa-tester`
+
+`qa-tester` beda dengan `product-analyst`: yang satu menilai konsep dari membaca kode/dokumen, yang satu mengeksekusi dan mengukur angka sungguhan. Jalankan `qa-tester` setelah `webgis-developer` atau `data-ai-analyst` melapor selesai — jangan anggap "selesai" sebelum diverifikasi empiris, terutama untuk tiga acceptance criteria berbasis waktu (< 2 detik, < 3 detik, < 5 detik).
+
+Subagent tidak bisa memanggil subagent lain (tidak ada nesting), jadi orkestrasi tetap dari sesi utama — panggil satu per satu atau paralel sesuai kebutuhan, lalu sintesis hasilnya di sesi utama.
+
+
 
 - `README.md` dan `.gitignore` sempat punya conflict marker git yang ter-commit — cek sudah bersih atau belum
 - RLS (Row Level Security) di Supabase — pastikan aktif di semua tabel, publik hanya boleh baca

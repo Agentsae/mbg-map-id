@@ -2,12 +2,41 @@ import { useEffect, useState } from 'react'
 import { Scale } from 'lucide-react'
 import { supabase, isConfigured } from '../../lib/supabaseClient'
 
+// Field kelompok_terdampak & rekomendasi_intervensi mengikuti nama kolom
+// yang sedang ditambahkan data-ai-analyst ke tabel skor_equity (jangan ubah
+// nama field ini) — PRD Bab 8 mewajibkan keduanya tampil per kelurahan dalam
+// ranking Transit Equity Index, bukan cuma skor tunggal.
 const DEMO_RANKING = [
-  { kelurahan: 'Mustika Jaya', skor: 0.81 },
-  { kelurahan: 'Bantar Gebang', skor: 0.76 },
-  { kelurahan: 'Rawa Lumbu', skor: 0.71 },
-  { kelurahan: 'Bekasi Utara', skor: 0.64 },
-  { kelurahan: 'Marga Mulya', skor: 0.42 },
+  {
+    kelurahan: 'Mustika Jaya',
+    skor: 0.81,
+    kelompok_terdampak: 'Lansia, anak sekolah, pekerja informal',
+    rekomendasi_intervensi: 'Prioritaskan halte baru + trotoar terhubung ke permukiman padat.',
+  },
+  {
+    kelurahan: 'Bantar Gebang',
+    skor: 0.76,
+    kelompok_terdampak: 'Pekerja informal, warga sekitar TPA',
+    rekomendasi_intervensi: 'Tambah rute feeder ke terminal terdekat, perbaiki penyeberangan.',
+  },
+  {
+    kelurahan: 'Rawa Lumbu',
+    skor: 0.71,
+    kelompok_terdampak: 'Anak sekolah, lansia',
+    rekomendasi_intervensi: 'Perbaikan trotoar & penerangan jalur jalan kaki menuju halte eksisting.',
+  },
+  {
+    kelurahan: 'Bekasi Utara',
+    skor: 0.64,
+    kelompok_terdampak: 'Pekerja shift malam, ibu dengan balita',
+    rekomendasi_intervensi: 'Kaji penambahan headway malam hari pada trayek eksisting.',
+  },
+  {
+    kelurahan: 'Marga Mulya',
+    skor: 0.42,
+    kelompok_terdampak: 'Anak sekolah',
+    rekomendasi_intervensi: 'Pantau berkala — prioritas rendah dibanding kelurahan lain.',
+  },
 ]
 
 export default function EquityIndexView() {
@@ -19,7 +48,10 @@ export default function EquityIndexView() {
 
     supabase
       .from('skor_equity')
-      .select('skor_final, ranking, batas_administrasi(nama_kelurahan)')
+      .select(
+        'skor_final, ranking, kelompok_terdampak, rekomendasi_intervensi, ' +
+        'batas_administrasi(nama_kelurahan)'
+      )
       .order('ranking', { ascending: true })
       .limit(10)
       .then(({ data, error }) => {
@@ -28,7 +60,12 @@ export default function EquityIndexView() {
           return
         }
         setRanking(
-          data.map((d) => ({ kelurahan: d.batas_administrasi?.nama_kelurahan, skor: d.skor_final }))
+          data.map((d) => ({
+            kelurahan: d.batas_administrasi?.nama_kelurahan,
+            skor: d.skor_final,
+            kelompok_terdampak: d.kelompok_terdampak,
+            rekomendasi_intervensi: d.rekomendasi_intervensi,
+          }))
         )
       })
   }, [])
@@ -48,24 +85,44 @@ export default function EquityIndexView() {
         </div>
       )}
 
-      <div className="p-4 space-y-2">
-        <p className="text-sm text-slate-500 mb-2">
+      <div className="p-4 space-y-3 overflow-y-auto">
+        <p className="text-sm text-slate-500 mb-1">
           Ranking ketimpangan akses transportasi antarkelurahan — skor lebih tinggi = lebih dirugikan
         </p>
         {ranking.map((r, i) => (
-          <div key={i} className="flex items-center gap-3">
-            <span className="w-5 text-sm font-mono text-slate-400">{i + 1}</span>
-            <span className="flex-1 text-sm text-slate-800">{r.kelurahan}</span>
-            <div className="w-24 h-2 bg-slate-100 rounded-full overflow-hidden">
-              <div
-                className="h-full bg-brand-orange rounded-full"
-                style={{ width: `${(r.skor / maxSkor) * 100}%` }}
-              />
+          <div key={i} className="border border-slate-200 rounded-lg p-3">
+            <div className="flex items-center gap-3">
+              <span className="w-5 text-sm font-mono text-slate-400">{i + 1}</span>
+              <span className="flex-1 text-sm font-medium text-slate-800">{r.kelurahan}</span>
+              <div className="w-20 h-2 bg-slate-100 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-brand-orange rounded-full"
+                  style={{ width: `${(r.skor / maxSkor) * 100}%` }}
+                />
+              </div>
+              <span className="w-10 text-right text-xs font-mono text-slate-600">{r.skor.toFixed(2)}</span>
             </div>
-            <span className="w-10 text-right text-xs font-mono text-slate-600">{r.skor.toFixed(2)}</span>
+
+            {/* Kelompok terdampak & rekomendasi intervensi — wajib per PRD Bab 8,
+                bukan cuma skor tunggal tanpa penjelasan. */}
+            <div className="mt-2 pl-8 space-y-1 text-xs text-slate-600">
+              <p>
+                <span className="font-medium text-slate-500">Kelompok terdampak: </span>
+                {formatKelompokTerdampak(r.kelompok_terdampak)}
+              </p>
+              <p>
+                <span className="font-medium text-slate-500">Rekomendasi intervensi: </span>
+                {r.rekomendasi_intervensi || '—'}
+              </p>
+            </div>
           </div>
         ))}
       </div>
     </div>
   )
+}
+
+function formatKelompokTerdampak(value) {
+  if (!value) return '—'
+  return Array.isArray(value) ? value.join(', ') : value
 }

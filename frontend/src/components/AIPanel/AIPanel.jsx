@@ -1,6 +1,9 @@
 import { useState } from 'react'
 import { Sparkles, Send, Loader2 } from 'lucide-react'
 import { supabase, isConfigured } from '../../lib/supabaseClient'
+import { KECAMATAN_KOTA_BEKASI } from '../../lib/kecamatan'
+
+const SEMUA_KECAMATAN = '' // opsi default dropdown -> tidak mengirim area_filter sama sekali
 
 const DEMO_RESPONSE = {
   narasi:
@@ -17,21 +20,29 @@ const DEMO_RESPONSE = {
 
 export default function AIPanel() {
   const [query, setQuery] = useState('')
+  const [areaFilter, setAreaFilter] = useState(SEMUA_KECAMATAN)
   const [messages, setMessages] = useState([])
   const [loading, setLoading] = useState(false)
 
   async function handleAsk() {
     if (!query.trim() || loading) return
     const userQuery = query.trim()
-    setMessages((prev) => [...prev, { role: 'user', text: userQuery }])
+    const areaLabel = areaFilter || 'Semua Kecamatan'
+    setMessages((prev) => [...prev, { role: 'user', text: userQuery, area: areaLabel }])
     setQuery('')
     setLoading(true)
 
     try {
       let result
       if (isConfigured) {
+        // area_filter hanya disertakan kalau user memilih kecamatan tertentu
+        // (bukan "Semua Kecamatan") -- nama field harus persis `area_filter`
+        // supaya cocok dengan parameter yang dibaca Edge Function ai-insight.
+        const body = { query: userQuery }
+        if (areaFilter) body.area_filter = areaFilter
+
         const { data, error } = await supabase.functions.invoke('ai-insight', {
-          body: { query: userQuery },
+          body,
         })
         if (error) throw error
         result = data
@@ -72,6 +83,9 @@ export default function AIPanel() {
         )}
         {messages.map((m, i) => (
           <div key={i} className={m.role === 'user' ? 'text-right' : 'text-left'}>
+            {m.role === 'user' && m.area && (
+              <p className="text-[10px] text-slate-400 mb-0.5">Cakupan: {m.area}</p>
+            )}
             <div
               className={
                 'inline-block max-w-[90%] rounded-lg px-3 py-2 text-sm ' +
@@ -103,7 +117,25 @@ export default function AIPanel() {
         )}
       </div>
 
-      <div className="p-3 border-t border-slate-200 flex gap-2">
+      <div className="px-3 pt-2 border-t border-slate-200">
+        <label className="text-[11px] font-medium text-slate-500 block mb-1">
+          Batasi ke kecamatan (opsional)
+        </label>
+        {/* TODO(ui-ux-designer): styling dropdown ini masih pakai select native
+            polos, belum disesuaikan dengan sistem desain final. */}
+        <select
+          value={areaFilter}
+          onChange={(e) => setAreaFilter(e.target.value)}
+          className="w-full text-sm border border-slate-300 rounded-md px-2 py-1.5 mb-2 bg-white focus:outline-none focus:ring-2 focus:ring-brand-blue"
+        >
+          <option value={SEMUA_KECAMATAN}>Semua Kecamatan</option>
+          {KECAMATAN_KOTA_BEKASI.map((k) => (
+            <option key={k} value={k}>{k}</option>
+          ))}
+        </select>
+      </div>
+
+      <div className="p-3 pt-0 border-t-0 flex gap-2">
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}

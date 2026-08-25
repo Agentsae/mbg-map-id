@@ -184,6 +184,12 @@ def upload_equity_scores(client, scored_df):
             "n_akses_kerja": round(row["n_akses_kerja"], 4),
             "skor_final": round(row["skor_final"], 4),
             "ranking": int(row["ranking"]),
+            # Kolom deskriptif (005_equity_kelompok_rekomendasi.sql) — narasi hasil
+            # analisis tim, bukan skor. Opsional: kalau scored_df tidak punya kolom
+            # ini (data lama sebelum load_demo_equity_data() diupdate), kirim None
+            # supaya Postgres pakai default/null, bukan error KeyError di sini.
+            "kelompok_terdampak": row["kelompok_terdampak"] if "kelompok_terdampak" in scored_df.columns else None,
+            "rekomendasi_intervensi": row["rekomendasi_intervensi"] if "rekomendasi_intervensi" in scored_df.columns else None,
         })
 
     if dilewati:

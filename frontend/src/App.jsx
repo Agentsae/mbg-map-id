@@ -1,18 +1,37 @@
-import { useState, useCallback } from 'react'
-import { Layers, Sparkles, MousePointerClick, BarChart3, Scale } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import {
+  LayoutDashboard,
+  Map as MapIcon,
+  SlidersHorizontal,
+  Sparkles,
+  MousePointerClick,
+  Lightbulb,
+  FileDown,
+  Settings,
+} from 'lucide-react'
 import MapView from './components/Map/MapView'
+import CaiScorePanel from './components/Map/CaiScorePanel'
 import AIPanel from './components/AIPanel/AIPanel'
 import SimulationPanel from './components/SimulationMode/SimulationPanel'
 import Dashboard from './components/Dashboard/Dashboard'
 import EquityIndexView from './components/EquityIndexView/EquityIndexView'
+import ComingSoon from './components/ComingSoon/ComingSoon'
 import { supabase, isConfigured } from './lib/supabaseClient'
+import { extractLatLon, findNearestPoint } from './lib/geo'
 
+// 8 menu sidebar sesuai wireframe resmi PRD (Gambar 3, lihat CLAUDE.md).
+// Menu yang belum punya komponen nyata dipetakan ke ComingSoon di bawah —
+// jangan ditinggal jadi link mati, tapi juga jangan dibangun lebih dulu
+// dari jadwal fase (lihat BUILD_CHECKLIST.md).
 const TABS = [
-  { id: 'peta', label: 'Peta', icon: Layers },
-  { id: 'ai', label: 'AI Insight', icon: Sparkles },
-  { id: 'simulasi', label: 'Simulasi', icon: MousePointerClick },
-  { id: 'dashboard', label: 'Dashboard', icon: BarChart3 },
-  { id: 'equity', label: 'Equity Index', icon: Scale },
+  { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { id: 'peta', label: 'Peta Interaktif', icon: MapIcon },
+  { id: 'analisis', label: 'Analisis Spasial', icon: SlidersHorizontal },
+  { id: 'ai', label: 'AI Spatial Consultant', icon: Sparkles },
+  { id: 'simulasi', label: 'Simulasi Skenario', icon: MousePointerClick },
+  { id: 'rekomendasi', label: 'Rekomendasi', icon: Lightbulb },
+  { id: 'data-laporan', label: 'Data & Laporan', icon: FileDown },
+  { id: 'pengaturan', label: 'Pengaturan', icon: Settings },
 ]
 
 const DEMO_SIMULATION_RESULT = {
@@ -24,45 +43,155 @@ const DEMO_SIMULATION_RESULT = {
   transit_eksisting_terdekat: { nama: 'Halte Summarecon Bekasi (contoh)', jarak_m: 520 },
 }
 
+// Data contoh titik_kandidat + skor_cai — dipakai kalau Supabase belum
+// tersambung/tabel masih kosong, supaya fitur "klik peta -> skor CAI" tetap
+// bisa didemokan. Struktur field sengaja meniru kolom asli skor_cai
+// (migration 001_init_tables.sql) — TIDAK ada formula dihitung di sini,
+// murni angka contoh statis.
+const DEMO_CAI_POINTS = [
+  {
+    lat: -6.2185, lon: 107.0074,
+    titik: { deskripsi_lokasi: 'Depan Summarecon Mall Bekasi (contoh)', kecamatan: 'Bekasi Utara', kelurahan: 'Marga Mulya' },
+    skor: { n_kepadatan: 0.82, n_jarak_inv: 0.55, n_volume: 0.70, n_survei: 0.60, bobot_kepadatan: 0.35, bobot_jarak: 0.25, bobot_volume: 0.25, bobot_survei: 0.15, skor_final: 0.69 },
+  },
+  {
+    lat: -6.2461, lon: 107.0021,
+    titik: { deskripsi_lokasi: 'Simpang Jl. Ir. H. Juanda (contoh)', kecamatan: 'Bekasi Timur', kelurahan: 'Margahayu' },
+    skor: { n_kepadatan: 0.90, n_jarak_inv: 0.70, n_volume: 0.20, n_survei: 0.55, bobot_kepadatan: 0.35, bobot_jarak: 0.25, bobot_volume: 0.25, bobot_survei: 0.15, skor_final: 0.62 },
+  },
+  {
+    lat: -6.2603, lon: 107.0324,
+    titik: { deskripsi_lokasi: 'Terminal Bekasi (contoh)', kecamatan: 'Bekasi Selatan', kelurahan: 'Margajaya' },
+    skor: { n_kepadatan: 0.65, n_jarak_inv: 0.40, n_volume: 0.85, n_survei: 0.75, bobot_kepadatan: 0.35, bobot_jarak: 0.25, bobot_volume: 0.25, bobot_survei: 0.15, skor_final: 0.65 },
+  },
+  {
+    lat: -6.2825, lon: 107.0450,
+    titik: { deskripsi_lokasi: 'Perempatan Rawa Lumbu (contoh)', kecamatan: 'Rawa Lumbu', kelurahan: 'Sepanjang Jaya' },
+    skor: { n_kepadatan: 0.75, n_jarak_inv: 0.80, n_volume: 0.15, n_survei: 0.40, bobot_kepadatan: 0.35, bobot_jarak: 0.25, bobot_volume: 0.25, bobot_survei: 0.15, skor_final: 0.55 },
+  },
+  {
+    lat: -6.2989, lon: 107.0658,
+    titik: { deskripsi_lokasi: 'Jl. Raya Mustika Jaya (contoh)', kecamatan: 'Mustika Jaya', kelurahan: 'Mustika Jaya' },
+    skor: { n_kepadatan: 0.88, n_jarak_inv: 0.85, n_volume: 0.10, n_survei: 0.35, bobot_kepadatan: 0.35, bobot_jarak: 0.25, bobot_volume: 0.25, bobot_survei: 0.15, skor_final: 0.58 },
+  },
+]
+
 export default function App() {
   const [activeTab, setActiveTab] = useState('peta')
+
+  // --- Simulasi What-If ---
   const [simulationActive, setSimulationActive] = useState(false)
   const [simLoading, setSimLoading] = useState(false)
   const [simResult, setSimResult] = useState(null)
-  const [simMarker, setSimMarker] = useState(null)
+
+  // --- Skor CAI per klik lokasi (Fase 2 — Composite Accessibility Index) ---
+  const [caiLoading, setCaiLoading] = useState(false)
+  const [caiResult, setCaiResult] = useState(null)
+  const [caiUsingDemo, setCaiUsingDemo] = useState(!isConfigured)
+  const caiPointsRef = useRef(null) // cache titik_kandidat+skor_cai, di-fetch sekali
+
+  // Marker tunggal untuk lokasi yang baru diklik (dipakai kedua mode)
+  const [clickMarker, setClickMarker] = useState(null)
+
+  // Ambil daftar titik_kandidat + skor_cai sekali di awal supaya klik peta
+  // instan (tidak query ulang tiap klik). Ini murni membaca hasil yang sudah
+  // dihitung data-ai-analyst, bukan menghitung ulang formula CAI di frontend.
+  useEffect(() => {
+    if (!isConfigured) return
+
+    supabase
+      .from('titik_kandidat')
+      .select(
+        'id, deskripsi_lokasi, kecamatan, kelurahan, geom, ' +
+        'skor_cai(n_kepadatan, n_jarak_inv, n_volume, n_survei, ' +
+        'bobot_kepadatan, bobot_jarak, bobot_volume, bobot_survei, skor_final)'
+      )
+      .limit(500)
+      .then(({ data, error }) => {
+        if (error || !data?.length) {
+          caiPointsRef.current = { points: DEMO_CAI_POINTS, usingDemo: true }
+          return
+        }
+        const points = data
+          .map((row) => {
+            const coords = extractLatLon(row.geom)
+            if (!coords) return null
+            const skorRow = Array.isArray(row.skor_cai) ? row.skor_cai[0] : row.skor_cai
+            if (!skorRow) return null
+            return {
+              lat: coords.lat,
+              lon: coords.lon,
+              titik: {
+                deskripsi_lokasi: row.deskripsi_lokasi,
+                kecamatan: row.kecamatan,
+                kelurahan: row.kelurahan,
+              },
+              skor: skorRow,
+            }
+          })
+          .filter(Boolean)
+
+        caiPointsRef.current = points.length
+          ? { points, usingDemo: false }
+          : { points: DEMO_CAI_POINTS, usingDemo: true }
+      })
+  }, [])
 
   const handleMapClick = useCallback(async ({ lat, lon }) => {
-    setSimLoading(true)
-    setSimMarker({ lat, lon, color: '#E08A1E', popupText: 'Lokasi simulasi' })
+    if (simulationActive) {
+      // --- Alur Simulasi What-If (RPC simulate_new_stop) ---
+      setSimLoading(true)
+      setCaiResult(null)
+      setClickMarker({ lat, lon, color: '#E08A1E', popupText: 'Lokasi simulasi' })
 
-    try {
-      if (isConfigured) {
-        const { data, error } = await supabase.rpc('simulate_new_stop', { lat, lon })
-        if (error) throw error
-        setSimResult(data)
-      } else {
-        await new Promise((r) => setTimeout(r, 500))
-        setSimResult(DEMO_SIMULATION_RESULT)
+      try {
+        if (isConfigured) {
+          const { data, error } = await supabase.rpc('simulate_new_stop', { lat, lon })
+          if (error) throw error
+          setSimResult(data)
+        } else {
+          await new Promise((r) => setTimeout(r, 500))
+          setSimResult(DEMO_SIMULATION_RESULT)
+        }
+      } catch (err) {
+        console.error('Gagal menjalankan simulate_new_stop:', err)
+        setSimResult(null)
+      } finally {
+        setSimLoading(false)
       }
-    } catch (err) {
-      console.error('Gagal menjalankan simulate_new_stop:', err)
-      setSimResult(null)
-    } finally {
-      setSimLoading(false)
+      return
     }
-  }, [])
+
+    // --- Alur skor CAI (klik lokasi -> cari titik_kandidat terdekat) ---
+    setCaiLoading(true)
+    setSimResult(null)
+    setClickMarker({ lat, lon, color: '#1B659D', popupText: 'Lokasi dicek' })
+
+    const cache = caiPointsRef.current ?? { points: DEMO_CAI_POINTS, usingDemo: !isConfigured }
+    const nearest = findNearestPoint(cache.points, { lat, lon })
+
+    setCaiUsingDemo(cache.usingDemo)
+    setCaiResult(
+      nearest
+        ? { skor: nearest.point.skor, titik: nearest.point.titik, distance_m: nearest.distance_m }
+        : { skor: null }
+    )
+    setCaiLoading(false)
+  }, [simulationActive])
 
   function handleToggleSimulation() {
     setSimulationActive((v) => !v)
     if (simulationActive) {
       // matikan mode -> bersihkan hasil supaya tidak membingungkan sesi berikutnya
       setSimResult(null)
-      setSimMarker(null)
+      setClickMarker(null)
+    } else {
+      setCaiResult(null)
     }
   }
 
   const showPanel = activeTab !== 'peta'
-  const markers = simMarker ? [simMarker] : []
+  const markers = clickMarker ? [clickMarker] : []
 
   return (
     <div className="h-screen w-screen flex flex-col bg-slate-50">
@@ -83,7 +212,7 @@ export default function App() {
       </header>
 
       <div className="flex flex-1 min-h-0">
-        {/* Sidebar nav */}
+        {/* Sidebar nav — 8 menu sesuai wireframe PRD (Gambar 3) */}
         <nav className="w-16 shrink-0 bg-white border-r border-slate-200 flex flex-col items-center py-3 gap-1">
           {TABS.map(({ id, label, icon: Icon }) => (
             <button
@@ -104,16 +233,31 @@ export default function App() {
 
         {/* Map */}
         <main className="flex-1 relative">
-          <MapView
-            simulationMode={simulationActive}
-            onMapClick={handleMapClick}
-            markers={markers}
-          />
+          <MapView simulationMode={simulationActive} onMapClick={handleMapClick} markers={markers}>
+            <CaiScorePanel
+              loading={caiLoading}
+              result={caiResult}
+              usingDemo={caiUsingDemo}
+              onClose={() => {
+                setCaiResult(null)
+                setClickMarker(null)
+              }}
+            />
+          </MapView>
         </main>
 
         {/* Right panel */}
         {showPanel && (
           <aside className="w-96 shrink-0 bg-white border-l border-slate-200 overflow-hidden">
+            {activeTab === 'dashboard' && <Dashboard />}
+            {activeTab === 'analisis' && (
+              <ComingSoon
+                icon={SlidersHorizontal}
+                title="Analisis Spasial"
+                description="Filter multi-layer per kecamatan (kepadatan, jaringan transit, indeks gap aksesibilitas) — jadwal Fase 3."
+                plannedPhase="Fase 3"
+              />
+            )}
             {activeTab === 'ai' && <AIPanel />}
             {activeTab === 'simulasi' && (
               <SimulationPanel
@@ -123,8 +267,23 @@ export default function App() {
                 result={simResult}
               />
             )}
-            {activeTab === 'dashboard' && <Dashboard />}
-            {activeTab === 'equity' && <EquityIndexView />}
+            {activeTab === 'rekomendasi' && <EquityIndexView />}
+            {activeTab === 'data-laporan' && (
+              <ComingSoon
+                icon={FileDown}
+                title="Data & Laporan"
+                description="Export ringkasan peta + indikator kunci sebagai PDF/gambar — jadwal Fase 4."
+                plannedPhase="Fase 4"
+              />
+            )}
+            {activeTab === 'pengaturan' && (
+              <ComingSoon
+                icon={Settings}
+                title="Pengaturan"
+                description="Preferensi tampilan & konfigurasi akun — belum masuk jalur kritis submission."
+                plannedPhase="Belum dijadwalkan"
+              />
+            )}
           </aside>
         )}
       </div>
