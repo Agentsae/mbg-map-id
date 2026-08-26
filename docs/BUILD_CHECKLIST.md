@@ -43,7 +43,7 @@ Checklist ini bukan pengganti PRD — kalau ada perbedaan, PRD (Bab 8, acceptanc
 
 - [ ] Upload hasil olahan data kependudukan/POI/halte ke tabel Supabase (ganti data sintetis)
 - [ ] Hitung ulang CAI/TDI/Transit Equity Index dengan bobot AHP final (bukan bobot dummy)
-- [ ] Isi Transit Equity Index Dashboard dengan ranking 5+ kelurahan asli beserta rekomendasi intervensi
+- [ ] Isi Transit Equity Index Dashboard dengan ranking 5+ kelurahan asli beserta rekomendasi intervensi (ranking 1 = `skor_final` TERTINGGI = kelurahan paling tertinggal/butuh intervensi — lihat catatan arah skala di CLAUDE.md bagian Struktur Data, jangan urutkan terbalik)
 - [ ] Re-validasi acceptance criteria kecepatan dengan volume data asli (bisa beda dari data dummy yang lebih kecil)
 
 ## Fase 5 — Fitur pendukung & finishing (🟢 kapan saja, prioritas rendah)

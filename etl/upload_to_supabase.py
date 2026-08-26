@@ -4,7 +4,7 @@ Tim MBG — MAPID WebGIS Competition 2026
 
 Mengunggah hasil compute_scores.py (CAI, TDI, Transit Equity Index) ke
 Supabase. Dipakai berulang kali selama periode survei/analisis (7 Agu–6 Sep,
-lihat FRAMEWORK_GeoTransitInsight.md Bagian 9), bukan sekali jalan di akhir.
+lihat docs/FRAMEWORK_GeoTransitInsight.md Bagian 9), bukan sekali jalan di akhir.
 
 Setup:
     pip install supabase python-dotenv
@@ -140,6 +140,123 @@ def upload_tdi_scores(client, scored_df):
 
     print(f"Berhasil update {updated} dari {len(scored_df)} baris grid_analisis (skor TDI).")
     return updated
+
+
+def load_halte_survey_excel(path: str, sheet_name: str = "Form Kondisi Halte") -> list:
+    """
+    Baca hasil Form Kondisi Halte dari file Excel instrumen survei
+    (docs/../etl/data/survei/Instrumen_Survei_GeoTransitInsight.xlsx atau
+    sejenis) dan kembalikan list of dict siap dipetakan ke tabel
+    halte_eksisting.
+
+    Struktur sheet (lihat sheet "Petunjuk" di file yang sama):
+      - Baris 1: header kolom
+      - Baris 2: instruksi pengisian tiap kolom (bukan data — dilewati)
+      - Baris 3: CONTOH pengisian (bukan data survei asli — dilewati)
+      - Baris 4 dst: data survei asli, satu baris per titik, berhenti di
+        baris pertama yang kolom "ID Halte"-nya kosong.
+
+    Kolom O/R/T/U (skor_kelengkapan_fisik, skor_headway, skor_okupansi,
+    skor_survei_gabungan) adalah kolom FORMULA Excel (lihat sheet Petunjuk):
+        O = IFERROR(COUNTIF(checklist,"Ya")/5, "")
+        R = IFERROR(MIN(1, headway_ideal/headway_aktual), "")
+        T = IFERROR(okupansi_persen/100, "")
+        U = IFERROR(0,4*O + 0,35*R + 0,25*T, "")
+    openpyxl tidak menjalankan formula Excel, jadi nilai cache-nya bisa
+    kosong kalau file pernah disave lewat openpyxl tanpa dibuka Excel/
+    LibreOffice dulu (formula string-nya tetap ada, cuma cache-nya hilang).
+    Untuk keandalan, keempat skor ini DIHITUNG ULANG di sini langsung dari
+    kolom mentah (checklist J-N, headway P/Q, okupansi S) memakai formula
+    yang identik — bukan dibaca dari cache — supaya hasilnya konsisten
+    apa pun status cache filenya.
+    """
+    import openpyxl
+
+    wb = openpyxl.load_workbook(path, data_only=True)
+    ws = wb[sheet_name]
+
+    records = []
+    row_num = 4  # baris 1=header, 2=instruksi, 3=contoh -> data asli mulai baris 4
+    while True:
+        id_halte = ws.cell(row=row_num, column=1).value
+        if id_halte is None:
+            break
+
+        lat = ws.cell(row=row_num, column=5).value
+        lon = ws.cell(row=row_num, column=6).value
+        if lat is None or lon is None:
+            print(f"[DILEWATI] Baris {row_num} ({id_halte}): Latitude/Longitude kosong.")
+            row_num += 1
+            continue
+
+        tanggal = ws.cell(row=row_num, column=8).value
+        tanggal_iso = None
+        if tanggal:
+            # Kolom bisa berupa datetime (Excel date) atau string 'DD/MM/YYYY'
+            if hasattr(tanggal, "strftime"):
+                tanggal_iso = tanggal.strftime("%Y-%m-%d")
+            else:
+                try:
+                    d, m, y = str(tanggal).split("/")
+                    tanggal_iso = f"{y}-{int(m):02d}-{int(d):02d}"
+                except ValueError:
+                    print(f"[PERINGATAN] Baris {row_num}: format tanggal '{tanggal}' tidak dikenali, disimpan null.")
+
+        # Checklist fisik (kolom J-N): Papan Nama, Atap/Naungan, Tempat Duduk,
+        # Akses Difabel, Penerangan — masing-masing 'Ya'/'Tidak'.
+        checklist = [ws.cell(row=row_num, column=c).value for c in range(10, 15)]
+        skor_kelengkapan_fisik = sum(1 for v in checklist if str(v).strip().lower() == "ya") / 5
+
+        headway_aktual = ws.cell(row=row_num, column=16).value
+        headway_ideal = ws.cell(row=row_num, column=17).value
+        skor_headway = min(1.0, headway_ideal / headway_aktual) if headway_aktual else None
+
+        okupansi_persen = ws.cell(row=row_num, column=19).value
+        skor_okupansi = (okupansi_persen / 100) if okupansi_persen is not None else None
+
+        skor_survei_gabungan = None
+        if skor_headway is not None and skor_okupansi is not None:
+            skor_survei_gabungan = (
+                0.4 * skor_kelengkapan_fisik + 0.35 * skor_headway + 0.25 * skor_okupansi
+            )
+
+        records.append({
+            "id_halte_survei": str(id_halte),
+            "nama": ws.cell(row=row_num, column=2).value,
+            "geom": f"SRID=4326;POINT({lon} {lat})",
+            "kecamatan": ws.cell(row=row_num, column=3).value,
+            "kelurahan": ws.cell(row=row_num, column=4).value,
+            "skor_kelengkapan_fisik": round(skor_kelengkapan_fisik, 3),
+            "headway_aktual_menit": headway_aktual,
+            "headway_ideal_menit": headway_ideal,
+            "skor_headway": round(skor_headway, 3) if skor_headway is not None else None,
+            "okupansi_persen": okupansi_persen,
+            "skor_okupansi": round(skor_okupansi, 3) if skor_okupansi is not None else None,
+            "skor_survei_gabungan": round(skor_survei_gabungan, 3) if skor_survei_gabungan is not None else None,
+            "tanggal_survei": tanggal_iso,
+            "nama_surveyor": ws.cell(row=row_num, column=7).value,
+            "foto_url": ws.cell(row=row_num, column=23).value,
+            "catatan": ws.cell(row=row_num, column=24).value,
+        })
+        row_num += 1
+
+    print(f"Dibaca {len(records)} baris data survei halte asli dari '{path}' (baris 4-{row_num - 1}).")
+    return records
+
+
+def upload_halte_data(client, records: list):
+    """
+    Upload hasil load_halte_survey_excel() ke tabel halte_eksisting.
+    Pakai upsert on_conflict='id_halte_survei' supaya aman dijalankan
+    berulang kali (re-run setelah data survei direvisi) tanpa duplikat.
+    """
+    if not records:
+        print("Tidak ada baris halte_eksisting yang diupload (records kosong).")
+        return None
+
+    result = client.table("halte_eksisting").upsert(records, on_conflict="id_halte_survei").execute()
+    print(f"Berhasil upload/update {len(records)} baris halte_eksisting.")
+    return result
 
 
 def lookup_kelurahan_ids(client, nama_kelurahan_list: list) -> dict:

@@ -12,6 +12,7 @@ import {
 import MapView from './components/Map/MapView'
 import CaiScorePanel from './components/Map/CaiScorePanel'
 import AIPanel from './components/AIPanel/AIPanel'
+import AnalisisSpasial from './components/AnalisisSpasial/AnalisisSpasial'
 import SimulationPanel from './components/SimulationMode/SimulationPanel'
 import Dashboard from './components/Dashboard/Dashboard'
 import EquityIndexView from './components/EquityIndexView/EquityIndexView'
@@ -22,7 +23,7 @@ import { extractLatLon, findNearestPoint } from './lib/geo'
 // 8 menu sidebar sesuai wireframe resmi PRD (Gambar 3, lihat CLAUDE.md).
 // Menu yang belum punya komponen nyata dipetakan ke ComingSoon di bawah —
 // jangan ditinggal jadi link mati, tapi juga jangan dibangun lebih dulu
-// dari jadwal fase (lihat BUILD_CHECKLIST.md).
+// dari jadwal fase (lihat docs/BUILD_CHECKLIST.md).
 const TABS = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'peta', label: 'Peta Interaktif', icon: MapIcon },
@@ -250,14 +251,7 @@ export default function App() {
         {showPanel && (
           <aside className="w-96 shrink-0 bg-white border-l border-slate-200 overflow-hidden">
             {activeTab === 'dashboard' && <Dashboard />}
-            {activeTab === 'analisis' && (
-              <ComingSoon
-                icon={SlidersHorizontal}
-                title="Analisis Spasial"
-                description="Filter multi-layer per kecamatan (kepadatan, jaringan transit, indeks gap aksesibilitas) — jadwal Fase 3."
-                plannedPhase="Fase 3"
-              />
-            )}
+            {activeTab === 'analisis' && <AnalisisSpasial />}
             {activeTab === 'ai' && <AIPanel />}
             {activeTab === 'simulasi' && (
               <SimulationPanel

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Sparkles, Send, Loader2 } from 'lucide-react'
+import { Sparkles, Send, Loader2, AlertTriangle } from 'lucide-react'
 import { supabase, isConfigured } from '../../lib/supabaseClient'
 import { KECAMATAN_KOTA_BEKASI } from '../../lib/kecamatan'
 
@@ -51,7 +51,20 @@ export default function AIPanel() {
         await new Promise((r) => setTimeout(r, 600))
         result = DEMO_RESPONSE
       }
-      setMessages((prev) => [...prev, { role: 'ai', text: result.narasi, ranking: result.ranking }])
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: 'ai',
+          text: result.narasi,
+          ranking: result.ranking,
+          // narasi_flagged: true saat Edge Function ai-insight mendeteksi narasi
+          // menyebut angka yang tidak cocok dengan skor manapun di data (indikasi
+          // halusinasi AI). Wajib ditampilkan ke user — lihat prinsip inti
+          // "setiap skor harus bisa ditelusuri" (CLAUDE.md).
+          flagged: Boolean(result.narasi_flagged),
+          flaggedReason: result.flagged_reason,
+        },
+      ])
     } catch (err) {
       setMessages((prev) => [
         ...prev,
@@ -96,6 +109,20 @@ export default function AIPanel() {
                   : 'bg-slate-100 text-slate-800')
               }
             >
+              {m.role === 'ai' && m.flagged && (
+                <div className="mb-2 flex items-start gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-2 py-1.5 text-left text-amber-800">
+                  <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-wide">
+                      Narasi ditandai — periksa kembali
+                    </p>
+                    <p className="text-xs mt-0.5">
+                      {m.flaggedReason ||
+                        'Sistem mendeteksi angka pada narasi ini tidak cocok dengan skor pada data. Jangan jadikan satu-satunya dasar keputusan — cek rincian skor di peta.'}
+                    </p>
+                  </div>
+                </div>
+              )}
               {m.text}
               {m.ranking && (
                 <ul className="mt-2 space-y-1 text-xs">

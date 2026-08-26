@@ -111,12 +111,57 @@ def compute_cai(df: pd.DataFrame, weights: dict = None) -> pd.DataFrame:
 
 def sensitivity_check(df: pd.DataFrame, base_weights: dict, delta: float = 0.1) -> pd.DataFrame:
     """
-    Uji kestabilan ranking: geser tiap bobot +/- delta (dengan sisanya
-    disesuaikan proporsional), lihat apakah urutan top-N berubah.
-    Dipakai untuk validasi metodologi sebelum dipresentasikan ke juri
-    (lihat framework Bagian 2, prinsip 'sensitivity analysis').
+    Uji kestabilan ranking skor_cai (CAI) terhadap pergeseran tiap bobot
+    +/- delta (dengan sisanya disesuaikan proporsional), lihat apakah
+    urutan top-N berubah. Dipakai untuk validasi metodologi sebelum
+    dipresentasikan ke juri (lihat framework Bagian 2, prinsip
+    'sensitivity analysis').
+
+    FIX (lihat _sensitivity_check_generic untuk detail bug lama): versi
+    sebelumnya membandingkan .rank() pada kolom skor_cai SETELAH df
+    diurutkan & di-reset index oleh compute_cai(), sehingga rank() di
+    atasnya selalu menghasilkan [1, 2, 3, ...] apa pun isinya -> selalu
+    melaporkan 0 perubahan ranking (positif palsu "robust"). Sekarang
+    delegasi ke _sensitivity_check_generic() yang membandingkan ranking
+    PER "nama_lokasi" (id_col), align lewat .reindex(), bukan per posisi
+    baris. Diverifikasi manual: menggeser bobot survei ke 0.97 membuat
+    "Kawasan Industri Marga Mulya" naik dari peringkat 4 ke 2 (dan
+    "Dekat Stasiun Bekasi Timur" turun dari 2 ke 4) -> terdeteksi sebagai
+    2 baris ranking berubah, tidak lagi 0.
     """
-    baseline_order = compute_cai(df, base_weights)["skor_cai"].rank(ascending=False)
+    return _sensitivity_check_generic(df, base_weights, "nama_lokasi", compute_cai, "skor_cai", delta)
+
+
+def _sensitivity_check_generic(
+    df: pd.DataFrame,
+    base_weights: dict,
+    id_col: str,
+    compute_fn,
+    score_col: str,
+    delta: float = 0.1,
+) -> pd.DataFrame:
+    """
+    Helper generik untuk uji kestabilan ranking (dipakai oleh
+    sensitivity_check_tdi dan sensitivity_check_equity di bawah).
+
+    LATAR BELAKANG BUG (sudah diperbaiki, dicatat supaya tidak terulang):
+    versi awal sensitivity_check() (CAI) membandingkan .rank() pada kolom
+    skor SETELAH df diurutkan & di-reset index oleh compute_fn. Karena
+    kolom itu sudah terurut menurun, rank() di atasnya SELALU menghasilkan
+    [1, 2, 3, ...] apa pun isinya — jadi baseline_order.values dan
+    new_order.values akan selalu identik walau identitas baris yang
+    menempati tiap peringkat berubah total. Itu bug: ranking_berubah akan
+    selalu terbaca 0, positif palsu untuk "robust". Diverifikasi manual:
+    menggeser bobot CAI ke ekstrem (survei=0.97) membuat "Kawasan Industri
+    Marga Mulya" naik dari peringkat 4 ke 2, tapi versi lama melaporkan 0
+    perubahan. sensitivity_check() (CAI) sekarang juga didelegasikan ke
+    fungsi generik ini, sama seperti sensitivity_check_tdi/_equity.
+
+    Fungsi generik ini memakai id_col (kolom identitas stabil, mis. nama
+    lokasi/grid_id/nama_kelurahan) supaya ranking dibandingkan PER ENTITAS,
+    bukan per posisi baris setelah sort.
+    """
+    baseline = compute_fn(df, base_weights).set_index(id_col)[score_col].rank(ascending=False)
     results = []
     for key in base_weights:
         for sign in (+1, -1):
@@ -125,14 +170,37 @@ def sensitivity_check(df: pd.DataFrame, base_weights: dict, delta: float = 0.1) 
             total = sum(shifted.values())
             shifted = {k: v / total for k, v in shifted.items()}  # renormalize ke 1.0
 
-            new_order = compute_cai(df, shifted)["skor_cai"].rank(ascending=False)
-            rank_changed = (baseline_order.values != new_order.values).sum()
+            new = compute_fn(df, shifted).set_index(id_col)[score_col].rank(ascending=False)
+            new_aligned = new.reindex(baseline.index)  # samakan urutan berdasarkan id_col, bukan posisi
+            rank_changed = (baseline.values != new_aligned.values).sum()
             results.append({
                 "kriteria_digeser": key,
                 "arah": "+" if sign > 0 else "-",
                 "jumlah_ranking_berubah": int(rank_changed),
             })
     return pd.DataFrame(results)
+
+
+def sensitivity_check_tdi(df: pd.DataFrame, base_weights: dict = None, delta: float = 0.1) -> pd.DataFrame:
+    """
+    Uji kestabilan ranking skor_tdi terhadap pergeseran bobot Indeks
+    Kebutuhan Mobilitas (mengikuti prinsip sensitivity_check() untuk CAI,
+    tapi dengan perbandingan per-grid_id yang benar — lihat catatan di
+    _sensitivity_check_generic).
+    """
+    base_weights = base_weights or DEFAULT_MOBILITY_WEIGHTS
+    return _sensitivity_check_generic(df, base_weights, "grid_id", compute_tdi, "skor_tdi", delta)
+
+
+def sensitivity_check_equity(df: pd.DataFrame, base_weights: dict = None, delta: float = 0.1) -> pd.DataFrame:
+    """
+    Uji kestabilan ranking skor_final (Transit Equity Index) terhadap
+    pergeseran bobot equity (mengikuti prinsip sensitivity_check() untuk
+    CAI, tapi dengan perbandingan per-nama_kelurahan yang benar — lihat
+    catatan di _sensitivity_check_generic).
+    """
+    base_weights = base_weights or DEFAULT_EQUITY_WEIGHTS
+    return _sensitivity_check_generic(df, base_weights, "nama_kelurahan", compute_equity_index, "skor_final", delta)
 
 
 def compute_indeks_kebutuhan_mobilitas(df: pd.DataFrame, weights: dict = None) -> pd.Series:
@@ -187,9 +255,25 @@ def compute_tdi(df: pd.DataFrame, mobility_weights: dict = None) -> pd.DataFrame
         -> lihat compute_indeks_kebutuhan_mobilitas()
 
     Return: df + kolom indeks_kebutuhan_mobilitas, tdi_raw (rasio mentah,
-    satuannya tidak berskala 0-1, disimpan untuk transparansi), dan skor_tdi
-    (0-1 hasil normalisasi tdi_raw, dipakai untuk ranking/pewarnaan peta —
-    skor lebih tinggi = grid makin "transit desert", makin butuh prioritas).
+    satuannya tidak berskala 0-1, disimpan APA ADANYA untuk transparansi/
+    debugging — inilah angka yang ditelusuri kalau ada yang bertanya "kok
+    grid ini skornya segini"), dan skor_tdi (0-1, dipakai untuk ranking/
+    pewarnaan peta — skor lebih tinggi = grid makin "transit desert",
+    makin butuh prioritas).
+
+    FIX outlier: skor_tdi TIDAK dinormalisasi langsung dari tdi_raw, tapi
+    dari log1p(tdi_raw) dulu. Alasan: tdi_raw dari pembagian oleh
+    skor_aksesibilitas_transit yang sangat kecil (dekat AKSESIBILITAS_FLOOR)
+    bisa meledak jadi outlier ekstrem (mis. grid dengan aksesibilitas=0).
+    Kalau normalize_min_max (linear min-max) dipakai langsung ke tdi_raw,
+    satu outlier ekstrem itu akan menjadi hi (nilai maksimum), dan SEMUA
+    grid lain — termasuk transit desert asli seperti Kaliabang Tengah,
+    Mustika Jaya, Rawa Lumbu — "tenggelam" ke dekat 0 karena skala jadi
+    didominasi outlier tsb, padahal secara kebutuhan riil mereka jelas jauh
+    lebih butuh prioritas dibanding grid yang sudah terlayani baik.
+    log1p() (kompresi logaritmik) meredam rentang ekstrem itu sebelum
+    min-max, sehingga sebaran skor_tdi tetap terbedakan secara berarti
+    antar grid, bukan cuma terdorong ke ujung skala oleh satu outlier.
     """
     out = df.copy()
     out["indeks_kebutuhan_mobilitas"] = compute_indeks_kebutuhan_mobilitas(out, mobility_weights)
@@ -204,7 +288,8 @@ def compute_tdi(df: pd.DataFrame, mobility_weights: dict = None) -> pd.DataFrame
     out["tdi_raw"] = (
         out["kepadatan_penduduk"] * out["indeks_kebutuhan_mobilitas"] / aksesibilitas_aman
     )
-    out["skor_tdi"] = normalize_min_max(out["tdi_raw"])
+    # log1p meredam outlier ekstrem sebelum min-max — lihat catatan "FIX outlier" di atas.
+    out["skor_tdi"] = normalize_min_max(np.log1p(out["tdi_raw"]))
 
     return out.sort_values("skor_tdi", ascending=False).reset_index(drop=True)
 
@@ -376,6 +461,12 @@ if __name__ == "__main__":
         "& kebutuhan mobilitas tinggi, tapi aksesibilitas transit rendah."
     )
 
+    print("\n--- Sensitivity analysis TDI (geser bobot Indeks Kebutuhan Mobilitas ±0.1) ---\n")
+    sens_tdi = sensitivity_check_tdi(demo_grid, DEFAULT_MOBILITY_WEIGHTS)
+    print(sens_tdi.to_string(index=False))
+    n_unstable_tdi = (sens_tdi["jumlah_ranking_berubah"] > 0).sum()
+    print(f"\n{n_unstable_tdi} dari {len(sens_tdi)} skenario pergeseran bobot mengubah ranking skor_tdi.")
+
     print("\n\n=== 3. Demo Transit Equity Index — data kelurahan sintetis ===\n")
     demo_equity = load_demo_equity_data()
     equity_result = compute_equity_index(demo_equity, DEFAULT_EQUITY_WEIGHTS)
@@ -388,3 +479,9 @@ if __name__ == "__main__":
         "\nCatatan: ranking 1 = kelurahan paling dirugikan/tertinggal aksesnya "
         "(skor_final tertinggi), sesuai urutan yang ditampilkan EquityIndexView.jsx."
     )
+
+    print("\n--- Sensitivity analysis Equity Index (geser tiap bobot ±0.1) ---\n")
+    sens_equity = sensitivity_check_equity(demo_equity, DEFAULT_EQUITY_WEIGHTS)
+    print(sens_equity.to_string(index=False))
+    n_unstable_equity = (sens_equity["jumlah_ranking_berubah"] > 0).sum()
+    print(f"\n{n_unstable_equity} dari {len(sens_equity)} skenario pergeseran bobot mengubah ranking skor_final.")

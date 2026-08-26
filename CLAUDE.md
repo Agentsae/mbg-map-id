@@ -42,6 +42,15 @@ Prinsip inti yang TIDAK BOLEH dilanggar saat implementasi:
 - **Composite Accessibility Index (CAI)** — Weighted Linear Combination dari: kepadatan penduduk, jarak ke fasilitas umum (inverse), volume penumpang transit terdekat, skor survei lapangan. Bobot ditentukan lewat AHP bersama mentor.
 - **Transit Desert Index (TDI)** — per grid 250–500m (dasymetric mapping), rasio kebutuhan mobilitas terhadap skor aksesibilitas transit.
 - **Transit Equity Index** — CAI + dimensi kerentanan sosial (usia rentan, akses pendidikan/kesehatan/kerja) per kelurahan. Ranking ketimpangan, bukan ranking prioritas lokasi.
+  **PENTING (arah skala, jangan sampai terbalik):** kolom `skor_final` pada tabel `skor_equity`
+  adalah skor KETIMPANGAN (equity gap), BUKAN skor "seberapa equitable" dalam arti tinggi=bagus.
+  Semakin TINGGI `skor_final`, semakin DIRUGIKAN/TERTINGGAL kelurahan tsb secara akses transit
+  (CAI di-inverse dulu sebelum masuk formula — lihat `etl/compute_scores.py`
+  `compute_equity_index()`). **Ranking 1 = `skor_final` tertinggi = kelurahan paling butuh
+  intervensi** (bukan kelurahan paling equitable/paling baik kondisinya). Konsisten dengan
+  `EquityIndexView.jsx` (frontend) yang sudah menampilkan penjelasan "skor lebih tinggi = lebih
+  dirugikan" di UI — pertahankan konvensi ini di narasi AI, dokumen, dan kode baru mana pun yang
+  menyebut istilah ini.
 - Simulasi What-If pakai estimasi jalan kaki (kecepatan 4–5 km/jam), BUKAN network routing riil (eksplisit out-of-scope).
 
 ## Fitur & Acceptance Criteria (sumber: PRD Bab 8 — pakai ini sebagai definition of done)
@@ -52,7 +61,7 @@ Prinsip inti yang TIDAK BOLEH dilanggar saat implementasi:
 | Composite Accessibility Index & TDI | Klik lokasi di peta → tampilkan skor + **rincian kontribusi tiap kriteria** (bukan angka tunggal tanpa penjelasan). |
 | AI Spatial Consultant | Respons pertanyaan bahasa natural **< 5 detik**, pakai ringkasan data hasil model spasial — bukan raw coordinates dikirim ke LLM. |
 | Simulasi "What-If" | Klik titik di peta → proyeksi penduduk tambahan terlayani + estimasi waktu tempuh jalan kaki, **< 3 detik**. |
-| Transit Equity Index Dashboard | Ranking minimal **5 kelurahan** skor equity terendah + kelompok terdampak + 1 rekomendasi intervensi per kelurahan. |
+| Transit Equity Index Dashboard | Ranking minimal **5 kelurahan** dengan kondisi aksesibilitas transit **paling timpang/tertinggal** (frasa PRD "skor equity terendah" = kondisi paling tidak equitable — di database ini berarti `skor_final` TERTINGGI pada tabel `skor_equity`, ranking = 1; lihat catatan arah skala di bagian Struktur Data di atas) + kelompok terdampak + 1 rekomendasi intervensi per kelurahan. |
 | Dashboard Indikator | Coverage ratio, jumlah transit desert teridentifikasi, potensi penerima manfaat — dari data yang sudah divalidasi. |
 | Export Report | Unduh ringkasan (peta + indikator kunci) sebagai PDF atau gambar. |
 
@@ -70,7 +79,7 @@ Prinsip inti yang TIDAK BOLEH dilanggar saat implementasi:
 
 Wireframe/mockup dashboard resmi ada di lampiran PRD (Gambar 3) — sidebar nav: Dashboard, Peta Interaktif, Analisis Spasial, AI Spatial Consultant, Simulasi Skenario, Rekomendasi, Data & Laporan, Pengaturan. Dashboard utama berisi: ringkasan Kota Bekasi (populasi, kepadatan, luas, usia produktif, indeks aksesibilitas rata-rata), kartu Transit Desert count, kartu Usulan Halte Prioritas, kartu Potensi Penerima Manfaat, Top 3 Rekomendasi AI (skor dampak, potensi manfaat, estimasi biaya), dan panel Simulasi Skenario dengan dropdown pilihan skenario.
 
-## Jalur Kritis (lihat BUILD_CHECKLIST.md untuk urutan tugas)
+## Jalur Kritis (lihat docs/BUILD_CHECKLIST.md untuk urutan tugas)
 
 Hari ini: 24 Agustus 2026. Submission: **13 September 2026**.
 

@@ -3,7 +3,7 @@ import { Construction } from 'lucide-react'
 /**
  * ComingSoon — placeholder seragam untuk menu sidebar yang sudah didefinisikan
  * di wireframe PRD (Gambar 3) tapi belum masuk jalur pengembangan saat ini
- * (lihat BUILD_CHECKLIST.md untuk fase). Dipakai supaya tidak ada link mati
+ * (lihat docs/BUILD_CHECKLIST.md untuk fase). Dipakai supaya tidak ada link mati
  * di sidebar 8 menu, tanpa over-build fitur sebelum waktunya.
  *
  * TODO(ui-ux-designer): ini styling placeholder generik/asumsi wajar —

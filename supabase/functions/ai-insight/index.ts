@@ -27,9 +27,25 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 const MODEL = "claude-haiku-4-5-20251001";
 
 Deno.serve(async (req) => {
+  // Parse body terpisah dari try/catch utama: JSON body yang rusak adalah
+  // kesalahan KLIEN (bad request), bukan kegagalan server — harus balas 400,
+  // bukan 500 seperti error internal lain di bawah (Supabase/Claude API).
+  // deno-lint-ignore no-explicit-any
+  let query: any;
+  // deno-lint-ignore no-explicit-any
+  let area_filter: any;
   try {
-    const { query, area_filter } = await req.json();
+    const body = await req.json();
+    query = body?.query;
+    area_filter = body?.area_filter;
+  } catch (_parseErr) {
+    return new Response(
+      JSON.stringify({ error: "Body request bukan JSON yang valid" }),
+      { status: 400, headers: { "Content-Type": "application/json" } }
+    );
+  }
 
+  try {
     if (!query) {
       return new Response(JSON.stringify({ error: "Field 'query' wajib diisi" }), { status: 400 });
     }
@@ -113,10 +129,17 @@ Deno.serve(async (req) => {
       );
     }
 
+    // NOTE field internal (bukan skema DB): key dikirim ke Claude sebagai
+    // "skor_ketimpangan", bukan "skor_equity" — supaya nama field itu sendiri
+    // sudah menyiratkan arah skala ke model (skor makin tinggi = makin
+    // timpang), mengurangi risiko LLM salah tafsir "equity" sebagai "makin
+    // tinggi makin adil". Nama kolom Supabase (skor_equity, tabel skor_equity)
+    // TIDAK berubah — ini murni field JSON di payload prompt & sepenuhnya
+    // independen dari skema database.
     const promptData = skorRows.map((r: any) => ({
       kelurahan: r.batas_administrasi?.nama_kelurahan,
       kecamatan: r.batas_administrasi?.nama_kecamatan,
-      skor_equity: r.skor_final,
+      skor_ketimpangan: r.skor_final,
       ranking: r.ranking,
       kelompok_terdampak: r.kelompok_terdampak,
       rekomendasi_intervensi: r.rekomendasi_intervensi,
@@ -125,6 +148,13 @@ Deno.serve(async (req) => {
     const systemPrompt = `Kamu adalah asisten analisis spasial untuk Dishub Kota Bekasi.
 Jelaskan skor Transit Equity Index berikut dalam bahasa yang mudah dipahami
 pejabat non-teknis, sertakan alasan berbasis angka yang diberikan.
+PENTING soal arah skala: field "skor_ketimpangan" di data ini adalah skor KETIMPANGAN
+(equity gap), BUKAN skor keadilan/kesetaraan akses. Semakin TINGGI skornya, semakin
+TERTINGGAL/DIRUGIKAN kelurahan tersebut secara akses transit — bukan semakin
+adil/equitable. "ranking": 1 berarti skor_ketimpangan PALING TINGGI, yaitu kelurahan
+yang paling butuh intervensi/prioritas, bukan kelurahan dengan akses terbaik. JANGAN
+pernah menyimpulkan "skor tinggi = akses bagus" atau "ranking 1 = paling adil" — itu
+terbalik dan akan menyesatkan pembaca.
 JANGAN mengubah, menghitung ulang, atau menambah angka apa pun di luar data ini — kamu
 hanya boleh MENJELASKAN skor yang sudah dihitung, bukan menentukan/menebak skor baru.
 Kalau menyebut skor, tulis maksimal 2 angka desimal dan gunakan tanda koma (,) sebagai
@@ -196,7 +226,7 @@ Jawab dalam Bahasa Indonesia, maksimal 4 kalimat.`;
     }
 
     const skorAsli = promptData
-      .map((d) => Number(d.skor_equity))
+      .map((d) => Number(d.skor_ketimpangan))
       .filter((n) => Number.isFinite(n));
     const angkaDiNarasi = extractDecimalNumbers(narasi);
     const angkaTidakCocok = angkaDiNarasi.filter((n) => !cocokDenganSkorAsli(n, skorAsli));
@@ -215,9 +245,12 @@ Jawab dalam Bahasa Indonesia, maksimal 4 kalimat.`;
     return new Response(
       JSON.stringify({
         narasi,
+        // NOTE: key response tetap "skor" (bukan skor_equity/skor_ketimpangan) —
+        // kontrak field ini sudah dipakai AIPanel.jsx (r.skor.toFixed(2)), TIDAK
+        // diubah oleh rename internal promptData di atas supaya frontend tidak putus.
         ranking: promptData.map((d) => ({
           kelurahan: d.kelurahan,
-          skor: d.skor_equity,
+          skor: d.skor_ketimpangan,
           kecamatan: d.kecamatan,
           kelompok_terdampak: d.kelompok_terdampak,
           rekomendasi_intervensi: d.rekomendasi_intervensi,

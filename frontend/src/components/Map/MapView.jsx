@@ -51,11 +51,26 @@ if (!(MAPID_STYLE_BASE && MAPID_API_KEY)) {
  *  - onMapClick: (coords: {lat, lon}) => void
  *  - markers: array of {lat, lon, color?, popupText?} — dipakai untuk render
  *    halte eksisting / titik kandidat / hasil simulasi
+ *  - layers: array of { id, type: 'fill'|'line'|'circle', data: GeoJSON, paint?, layout?, visible? }
+ *    — generic GeoJSON layer, dipakai untuk multi-layer gap analysis (Analisis
+ *    Spasial). Sengaja generik (bukan hardcode nama layer) supaya dipakai
+ *    ulang oleh instance MapView manapun tanpa menambah pola integrasi baru.
+ *  - children: overlay opsional yang dirender di atas canvas peta (mis.
+ *    <CaiScorePanel>) — diposisikan absolute di dalam container relative,
+ *    tidak menggantikan canvas MapLibre. Kalau tidak dikirim (mis. dipakai
+ *    dari AnalisisSpasial), tidak merender apa pun tambahan.
  */
-export default function MapView({ simulationMode = false, onMapClick, markers = [] }) {
+export default function MapView({
+  simulationMode = false,
+  onMapClick,
+  markers = [],
+  layers = [],
+  children,
+}) {
   const containerRef = useRef(null)
   const mapRef = useRef(null)
   const markerRefs = useRef([])
+  const layerIdsRef = useRef([])
 
   // Init peta sekali saat komponen pertama kali render
   useEffect(() => {
@@ -122,6 +137,48 @@ export default function MapView({ simulationMode = false, onMapClick, markers = 
     })
   }, [markers])
 
+  // Sinkronisasi layer GeoJSON generik (mis. grid kepadatan, jaringan transit,
+  // indeks gap aksesibilitas untuk Analisis Spasial). addSource/addLayer harus
+  // menunggu style selesai load, jadi pakai isStyleLoaded() + fallback event 'load'.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) return
+
+    const applyLayers = () => {
+      const nextIds = new Set(layers.map((l) => l.id))
+      // Buang layer/source lama yang sudah tidak ada di prop terbaru
+      layerIdsRef.current.forEach((id) => {
+        if (!nextIds.has(id)) {
+          if (map.getLayer(id)) map.removeLayer(id)
+          if (map.getSource(id)) map.removeSource(id)
+        }
+      })
+
+      layers.forEach((layer) => {
+        const { id, type, data, paint = {}, layout = {}, visible = true } = layer
+        if (map.getSource(id)) {
+          map.getSource(id).setData(data)
+        } else {
+          map.addSource(id, { type: 'geojson', data })
+        }
+        if (!map.getLayer(id)) {
+          map.addLayer({ id, type, source: id, paint, layout })
+        } else {
+          Object.entries(paint).forEach(([k, v]) => map.setPaintProperty(id, k, v))
+        }
+        map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none')
+      })
+
+      layerIdsRef.current = layers.map((l) => l.id)
+    }
+
+    if (map.isStyleLoaded()) {
+      applyLayers()
+    } else {
+      map.once('load', applyLayers)
+    }
+  }, [layers])
+
   return (
     <div className="relative w-full h-full">
       <div ref={containerRef} className="w-full h-full" />
@@ -130,6 +187,7 @@ export default function MapView({ simulationMode = false, onMapClick, markers = 
           Mode Simulasi aktif — klik di peta untuk menguji lokasi halte baru
         </div>
       )}
+      {children}
     </div>
   )
 }

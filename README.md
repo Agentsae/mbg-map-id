@@ -69,4 +69,4 @@ pip install -r requirements.txt
 - PRD: `PRD_GeoTransitInsight-2.docx`
 - Proposal: `MBG_GeoTransitInsight-2.pdf`
 - Notulen TM I: `Notulen tech meet revisi.pdf`
-- Framework teknis: `FRAMEWORK_GeoTransitInsight.md`
+- Framework teknis: `docs/FRAMEWORK_GeoTransitInsight.md`
