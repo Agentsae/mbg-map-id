@@ -1,4 +1,5 @@
 import { X, Target } from 'lucide-react'
+import { isSurveyPlaceholderPoint } from '../../lib/titikKandidat'
 
 /**
  * CaiScorePanel — overlay di atas peta yang muncul saat user klik lokasi
@@ -82,6 +83,21 @@ export default function CaiScorePanel({ loading, result, usingDemo, onClose }) {
               />
             </div>
           </div>
+
+          {isSurveyPlaceholderPoint(result.titik?.id_titik_survei) && (
+            <div className="text-xs bg-amber-50 text-amber-800 border border-amber-200 rounded-md px-3 py-2">
+              *Kepadatan &amp; survei: data sementara (nilai netral/placeholder), menunggu data
+              kepadatan penduduk per titik (BPS) dan survei lapangan lengkap. Kriteria jarak &amp;
+              volume pada titik ini sudah dari hasil traffic counting lapangan.
+            </div>
+          )}
+
+          {result.titik?.catatan && (
+            <div className="text-xs bg-slate-50 text-slate-600 border border-slate-200 rounded-md px-3 py-2">
+              <span className="font-medium text-slate-500">Catatan survei: </span>
+              {result.titik.catatan}
+            </div>
+          )}
 
           <div className="text-xs text-slate-400 pt-2 border-t border-slate-200 space-y-0.5">
             {result.titik?.deskripsi_lokasi && <p>Titik kandidat: {result.titik.deskripsi_lokasi}</p>}

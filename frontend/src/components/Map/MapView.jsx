@@ -49,8 +49,13 @@ if (!(MAPID_STYLE_BASE && MAPID_API_KEY)) {
  *  - simulationMode: boolean — kalau true, klik di peta akan memanggil onMapClick
  *    dengan {lat, lon} (dipakai fitur Simulasi What-If)
  *  - onMapClick: (coords: {lat, lon}) => void
- *  - markers: array of {lat, lon, color?, popupText?} — dipakai untuk render
- *    halte eksisting / titik kandidat / hasil simulasi
+ *  - markers: array of {lat, lon, color?, popupText?, popupHtml?, onClick?} —
+ *    dipakai untuk render halte eksisting / titik kandidat / hasil simulasi.
+ *    popupHtml (opsional) dipakai kalau butuh format lebih dari satu baris
+ *    (mis. deskripsi + wilayah + catatan titik kandidat); kalau ada,
+ *    didahulukan dari popupText. onClick (opsional) dipanggil saat marker
+ *    itu sendiri diklik langsung (bukan cuma klik peta lalu dicari terdekat)
+ *    — dipakai supaya titik_kandidat bisa langsung dipilih dari markernya.
  *  - layers: array of { id, type: 'fill'|'line'|'circle', data: GeoJSON, paint?, layout?, visible? }
  *    — generic GeoJSON layer, dipakai untuk multi-layer gap analysis (Analisis
  *    Spasial). Sengaja generik (bukan hardcode nama layer) supaya dipakai
@@ -91,19 +96,23 @@ export default function MapView({
     }
   }, [])
 
-  // Klik peta -> trigger callback saat simulationMode aktif
+  // Klik peta -> trigger callback selalu (bukan hanya saat simulationMode
+  // aktif). Pemanggil (App.jsx) yang memutuskan alur mana yang jalan
+  // (simulasi RPC vs cek skor CAI) berdasarkan mode aktifnya sendiri — kalau
+  // handler ini dibatasi ke simulationMode saja, klik peta biasa di luar
+  // mode simulasi tidak akan pernah memicu panel skor CAI sama sekali
+  // (bug: acceptance criteria "klik lokasi di peta -> skor CAI" jadi mati).
   useEffect(() => {
     const map = mapRef.current
     if (!map) return
 
     const handleClick = (e) => {
-      if (!simulationMode) return
       onMapClick?.({ lat: e.lngLat.lat, lon: e.lngLat.lng })
     }
 
     map.on('click', handleClick)
     return () => map.off('click', handleClick)
-  }, [simulationMode, onMapClick])
+  }, [onMapClick])
 
   // Update cursor supaya jelas kapan mode simulasi aktif
   useEffect(() => {
@@ -129,9 +138,22 @@ export default function MapView({
 
       const marker = new Marker({ element: el }).setLngLat([m.lon, m.lat])
 
-      if (m.popupText) {
+      if (m.popupHtml) {
+        marker.setPopup(new Popup({ offset: 12 }).setHTML(m.popupHtml))
+      } else if (m.popupText) {
         marker.setPopup(new Popup({ offset: 12 }).setText(m.popupText))
       }
+
+      if (m.onClick) {
+        el.style.cursor = 'pointer'
+        el.addEventListener('click', (ev) => {
+          // Hentikan propagasi supaya klik marker tidak juga dihitung sebagai
+          // klik peta biasa (mis. memicu mode simulasi di koordinat lain).
+          ev.stopPropagation()
+          m.onClick()
+        })
+      }
+
       marker.addTo(map)
       return marker
     })

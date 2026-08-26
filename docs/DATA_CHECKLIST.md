@@ -8,12 +8,13 @@
 **Hari ini: 26 Agustus 2026 — 18 hari ke submission.** Field Day 3 (survei terakhir):
 29-30 Agustus — **tinggal 3 hari**.
 
-## ⚠️ Dua risiko baru ditemukan lewat audit ini (belum ada sebelumnya di BUILD_CHECKLIST.md)
+## ⚠️ Update 26 Agustus (sore): status risiko
 
-1. **Instrumen survei belum ada sama sekali.** Form Kondisi Halte (isi `halte_eksisting`)
-   dan Form Traffic Counting (isi `titik_kandidat`) baru disebut sebagai nama konsep di
-   dokumen — tidak ada Google Form/form MAPID Apps/kuesioner aktual di repo. **Wajib
-   dibuat sebelum 29 Agustus** atau Field Day 3 menghasilkan data tak terstruktur.
+1. ~~Instrumen survei belum ada sama sekali~~ — **SELESAI/TERBUKTI SALAH ASUMSI.** Ternyata
+   sudah ada `Instrumen_Survei_GeoTransitInsight.xlsx` (Form Kondisi Halte + Form Traffic
+   Counting, lengkap dengan formula skor otomatis). **15 halte asli koridor BisKita sudah
+   ter-upload ke `halte_eksisting`** (lihat `etl/data/survei/`, fungsi `upload_halte_data()`
+   di `etl/upload_to_supabase.py`). Form Traffic Counting masih diisi tim lain, belum siap.
 2. **Sesi AHP dengan mentor kemungkinan belum kelar.** Dijadwalkan 21-27 Agustus di
    `FRAMEWORK_GeoTransitInsight.md` (harusnya sudah lewat), tapi `konfigurasi_bobot`
    masih kosong untuk TDI/Equity, dan bobot CAI masih berlabel "perlu divalidasi mentor"
@@ -33,12 +34,12 @@
 
 | Data | Status | Index | Cara mendapatkan | Sebelum 13 Sep? |
 |---|---|---|---|---|
-| Batas administrasi kelurahan/kecamatan (poligon asli) | Kosong — seed dummy pakai bounding box kasar | Fondasi spasial semua tabel | **BIG** (tanahair.indonesia.go.id) atau **Bappeda Kota Bekasi** (lebih presisi) | Ya, publik — prioritaskan duluan |
+| Batas administrasi kelurahan/kecamatan (poligon asli) | Kosong — seed dummy pakai bounding box kasar. **Dicoba via OSM Overpass 26 Agu — GAGAL**, cakupan OSM untuk batas administrasi Kota Bekasi sangat tidak lengkap (0 dari 12 kecamatan, cuma 2 dari puluhan kelurahan punya poligon; 6 nama kelurahan dummy tidak match spasial ke OSM manapun). GeoJSON hasil percobaan tersimpan di `etl/data/osm/` untuk referensi, TIDAK diupload ke DB. | Fondasi spasial semua tabel | **BIG** (tanahair.indonesia.go.id) atau **Bappeda Kota Bekasi** (lebih presisi) — OSM TERBUKTI BUKAN alternatif yang valid untuk data ini | Ya, publik — prioritaskan duluan, tapi HARUS lewat BIG/Bappeda, bukan OSM |
 | Jumlah penduduk + proporsi lansia/balita per kelurahan | Kosong, berlabel sintetis | `n_kepadatan` CAI (bobot 0.35, terbesar), TDI, Equity | **BPS Kota Bekasi Dalam Angka** (publik); granular lansia/balita mungkin perlu request **Dukcapil** | Ya untuk BPS; Dukcapil mungkin lebih lambat — pakai agregat kecamatan sebagai proksi kalau mepet |
 | Rasio rumah tangga tanpa kendaraan pribadi | Tidak ada — kode sudah fallback netral 0.5 | TDI (Indeks Kebutuhan Mobilitas) | BPS Susenas (granularitas kelurahan jarang publik) | **Realistis tetap fallback 0.5** — jangan diperjuangkan mati-matian |
-| POI sekolah | Kosong, sintetis | `n_jarak_inv` CAI, TDI, Equity | **Dapodik Kemendikbud** atau **OSM Overpass API** (`amenity=school`, tanpa izin) | Ya |
-| POI faskes | Kosong, sintetis | Sama seperti di atas | **Kemenkes/Dinkes Kota Bekasi** atau **OSM** (`amenity=hospital/clinic`) | Ya |
-| POI pusat kerja/industri | Kosong, sintetis | Sama seperti di atas | **RTRW Kota Bekasi** (Bappeda/PUPR) atau **OSM** (`landuse=industrial`, `office=*`) | RTRW mungkin lambat; OSM sebagai fallback cepat |
+| POI sekolah | ✅ **SELESAI 26 Agu** — 330 baris nyata dari OSM di tabel `poi` (`sumber='OpenStreetMap'`), 5 baris dummy lama tetap ada terpisah | `n_jarak_inv` CAI, TDI, Equity | Ditarik via `etl/fetch_upload_osm_poi.py` (Overpass API, `amenity=school`) | Selesai |
+| POI faskes | ✅ **SELESAI 26 Agu** — 162 baris nyata dari OSM | Sama seperti di atas | Sama, `amenity=hospital/clinic` + `healthcare=*` | Selesai |
+| POI pusat kerja/industri | ✅ **SELESAI 26 Agu** — 271 baris nyata dari OSM | Sama seperti di atas | Sama, `landuse=industrial` + `office=*` | Selesai |
 | Building footprint (dasymetric mapping) | Sintetis (`load_demo_buildings()`) | Presisi `grid_analisis.kepadatan_penduduk` → TDI | **OSM Overpass API / Geofabrik** (`building=*`), tanpa izin | Ya — murni teknis, cepat |
 
 ## Kategori C — Butuh kontak institusi (paling berisiko delay)

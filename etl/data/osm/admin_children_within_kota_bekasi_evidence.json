@@ -1,0 +1,144 @@
+{
+  "version": 0.6,
+  "generator": "Overpass API 0.7.62.11 87bfad18",
+  "osm3s": {
+    "timestamp_osm_base": "2026-08-26T13:34:33Z",
+    "timestamp_areas_base": "2026-08-25T20:39:47Z",
+    "copyright": "The data included in this document is from www.openstreetmap.org. The data is made available under ODbL."
+  },
+  "elements": [
+    {
+      "type": "relation",
+      "id": 2868803,
+      "tags": {
+        "admin_level": "7",
+        "boundary": "administrative",
+        "name": "Jatirasa",
+        "type": "boundary"
+      }
+    },
+    {
+      "type": "relation",
+      "id": 10074565,
+      "tags": {
+        "admin_level": "10",
+        "boundary": "administrative",
+        "name": "RT 07",
+        "type": "boundary"
+      }
+    },
+    {
+      "type": "relation",
+      "id": 10074566,
+      "tags": {
+        "admin_level": "10",
+        "boundary": "administrative",
+        "name": "RT 08",
+        "type": "boundary"
+      }
+    },
+    {
+      "type": "relation",
+      "id": 10074567,
+      "tags": {
+        "admin_level": "10",
+        "boundary": "administrative",
+        "name": "RT 05",
+        "type": "boundary"
+      }
+    },
+    {
+      "type": "relation",
+      "id": 10074568,
+      "tags": {
+        "admin_level": "10",
+        "boundary": "administrative",
+        "name": "RT 03",
+        "type": "boundary"
+      }
+    },
+    {
+      "type": "relation",
+      "id": 10074569,
+      "tags": {
+        "admin_level": "10",
+        "boundary": "administrative",
+        "name": "RT 04",
+        "type": "boundary"
+      }
+    },
+    {
+      "type": "relation",
+      "id": 10074570,
+      "tags": {
+        "admin_level": "10",
+        "boundary": "administrative",
+        "name": "RT 06",
+        "type": "boundary"
+      }
+    },
+    {
+      "type": "relation",
+      "id": 10074571,
+      "tags": {
+        "admin_level": "10",
+        "boundary": "administrative",
+        "name": "RT 02",
+        "type": "boundary"
+      }
+    },
+    {
+      "type": "relation",
+      "id": 10074572,
+      "tags": {
+        "admin_level": "10",
+        "boundary": "administrative",
+        "name": "RT 01",
+        "type": "boundary"
+      }
+    },
+    {
+      "type": "relation",
+      "id": 10108240,
+      "tags": {
+        "admin_level": "9",
+        "boundary": "administrative",
+        "name": "RW 07",
+        "type": "boundary"
+      }
+    },
+    {
+      "type": "relation",
+      "id": 14509732,
+      "tags": {
+        "admin_level": "7",
+        "boundary": "administrative",
+        "name": "Bekasi Jaya",
+        "type": "boundary"
+      }
+    },
+    {
+      "type": "relation",
+      "id": 14509733,
+      "tags": {
+        "admin_level": "5",
+        "boundary": "administrative",
+        "name": "Bekasi",
+        "name:en": "Bekasi",
+        "name:id": "Bekasi",
+        "name:ko": "브카시",
+        "name:su": "ᮘᮨᮊᮞᮤ",
+        "name:su-Latn": "Bekasi",
+        "official_name": "Kota Bekasi",
+        "official_name:en": "Bekasi City",
+        "official_name:id": "Kota Bekasi",
+        "official_name:su": "ᮊᮧᮒ ᮘᮨᮊᮞᮤ",
+        "official_name:su-Latn": "Kota Bekasi",
+        "place": "city",
+        "type": "boundary",
+        "wikidata": "Q10392",
+        "wikipedia": "id:Kota Bekasi"
+      }
+    }
+  ]
+}
