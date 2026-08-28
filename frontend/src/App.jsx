@@ -11,6 +11,7 @@ import {
 } from 'lucide-react'
 import MapView from './components/Map/MapView'
 import CaiScorePanel from './components/Map/CaiScorePanel'
+import MapLegend from './components/Map/MapLegend'
 import AIPanel from './components/AIPanel/AIPanel'
 import AnalisisSpasial from './components/AnalisisSpasial/AnalisisSpasial'
 import SimulationPanel from './components/SimulationMode/SimulationPanel'
@@ -18,8 +19,9 @@ import Dashboard from './components/Dashboard/Dashboard'
 import EquityIndexView from './components/EquityIndexView/EquityIndexView'
 import ComingSoon from './components/ComingSoon/ComingSoon'
 import { supabase, isConfigured } from './lib/supabaseClient'
-import { extractLatLon, findNearestPoint } from './lib/geo'
+import { extractLatLon, extractLineStringCoords, findNearestPoint } from './lib/geo'
 import { isSurveyPlaceholderPoint } from './lib/titikKandidat'
+import { isDummyHalte } from './lib/halteEksisting'
 
 // 8 menu sidebar sesuai wireframe resmi PRD (Gambar 3, lihat CLAUDE.md).
 // Menu yang belum punya komponen nyata dipetakan ke ComingSoon di bawah —
@@ -78,12 +80,85 @@ const DEMO_CAI_POINTS = [
   },
 ]
 
+// Data contoh halte_eksisting — dipakai kalau Supabase belum tersambung/tabel
+// masih kosong, supaya layer "jaringan transit eksisting" (acceptance criteria
+// Peta Multi-Layer Gap Analysis, CLAUDE.md) tetap tampil. Koordinat & nama
+// meniru sebagian titik nyata koridor BisKita di
+// etl/data/survei/koordinat_halte_koridor_biskita.csv — ditandai "(contoh)"
+// karena ini bukan hasil query tabel asli.
+const DEMO_HALTE_POINTS = [
+  { lat: -6.25645, lon: 106.99116, nama: 'Halte Simpang Pekayon (contoh)', kecamatan: 'Bekasi Selatan' },
+  { lat: -6.25558, lon: 106.99061, nama: 'Halte Revo Mall (contoh)', kecamatan: 'Bekasi Selatan' },
+  { lat: -6.2771474, lon: 106.9919647, nama: 'Halte RS Elisabeth (contoh)', kecamatan: 'Bekasi Selatan' },
+  { lat: -6.2917104, lon: 106.9848925, nama: 'Halte Pesona Metropolitan Bekasi (contoh)', kecamatan: 'Bekasi Selatan' },
+  { lat: -6.30884, lon: 106.98381, nama: 'Halte STISIP Bekasi (contoh)', kecamatan: 'Bekasi Selatan' },
+]
+
+// Data contoh rute_transit_eksisting — dipakai kalau Supabase belum
+// tersambung/tabel masih kosong, meniru struktur 2 layer nyata (koridor
+// BisKita tersurvei + jaringan rel KRL, lihat docs/DATA_CHECKLIST.md Tugas B).
+// Koordinat BisKita meniru DEMO_HALTE_POINTS di atas; koordinat KRL murni
+// ilustratif (ditandai "(contoh)"), BUKAN jejak rel sungguhan.
+const DEMO_RUTE_BISKITA_GEOJSON = {
+  type: 'FeatureCollection',
+  features: [
+    {
+      type: 'Feature',
+      geometry: { type: 'LineString', coordinates: DEMO_HALTE_POINTS.map((h) => [h.lon, h.lat]) },
+      properties: { nama: 'Koridor BisKita (contoh)' },
+    },
+  ],
+}
+const DEMO_RUTE_KRL_GEOJSON = {
+  type: 'FeatureCollection',
+  features: [
+    {
+      type: 'Feature',
+      geometry: {
+        type: 'LineString',
+        coordinates: [
+          [106.9928, -6.2394],
+          [107.0074, -6.2185],
+        ],
+      },
+      properties: { nama: 'Jalur KRL Commuter Line (contoh)' },
+    },
+  ],
+}
+const DEMO_RUTE_KRL_STASIUN = [
+  { lat: -6.2394, lon: 106.9928, nama: 'Stasiun Bekasi (contoh)' },
+]
+const DEMO_RUTE_TRANSIT_DISCLAIMER =
+  'Data contoh — belum tersambung ke tabel rute_transit_eksisting.'
+
 // Warna marker titik_kandidat di peta — dibedakan sederhana antara titik yang
 // skornya sepenuhnya final vs titik baru yang sebagian kriterianya masih
 // proxy/placeholder (lihat isSurveyPlaceholderPoint). Palet & bentuk akhir
 // TODO(ui-ux-designer): ini asumsi sementara, bukan keputusan desain final.
 const CANDIDATE_MARKER_COLOR = '#2E7D5B'
 const CANDIDATE_MARKER_COLOR_PLACEHOLDER = '#B5851B'
+
+// Warna marker halte TERSURVEI — sengaja beda rumpun warna (ungu) dari
+// hijau/kuning titik_kandidat di atas supaya "halte yang sudah ada" vs
+// "usulan lokasi baru" langsung terlihat beda tanpa harus buka popup dulu.
+// TODO(ui-ux-designer): ini asumsi sementara, bukan keputusan desain final.
+const HALTE_TERSURVEI_MARKER_COLOR = '#7C3AED'
+
+// Warna garis koridor BisKita — sengaja DIBEDAKAN dari marker halte tersurvei
+// (dulu sama-sama #7C3AED, jadi sulit dibedakan "ini titik halte" vs "ini
+// garis rute" sekilas pandang). Dipilih oranye (referensi warna brand BisKita
+// di beberapa kota nyata) supaya tetap kerasa "satu keluarga BisKita" dari sisi
+// makna, tapi kontras jelas terhadap ungu halte maupun biru KRL — 3 warna jadi
+// gampang dibedakan sekilas: ungu=titik halte, oranye=garis BisKita, biru=KRL.
+// TODO(ui-ux-designer): ini asumsi sementara, bukan keputusan desain final.
+const RUTE_BISKITA_COLOR = '#F97316'
+
+// Warna jaringan KRL — sengaja beda rumpun (biru) dari ungu BisKita di atas
+// supaya "infrastruktur eksis tapi belum disurvei tim" langsung terlihat beda
+// dari korridor yang sudah jadi objek survei. Biru dipilih supaya familiar ke
+// user awam (asosiasi umum warna KRL Commuter Line Indonesia).
+// TODO(ui-ux-designer): ini asumsi sementara, bukan keputusan desain final.
+const RUTE_KRL_COLOR = '#2563EB'
 
 function escapeHtml(str) {
   return String(str ?? '').replace(/[&<>"']/g, (c) => (
@@ -103,6 +178,59 @@ function buildCandidatePopupHtml(titik) {
     lines.push(escapeHtml(titik.catatan))
   }
   lines.push('<span style="color:#64748b">Klik untuk lihat rincian skor CAI</span>')
+  return lines.join('<br/>')
+}
+
+// Popup halte_eksisting sengaja minimal (nama + wilayah) — rincian survei
+// lengkap (headway, okupansi, dst) itu domain tab Analisis Spasial, bukan
+// tab Peta Interaktif ini. Label "Halte Tersurvei" (bukan "Halte Eksisting")
+// sengaja dipakai: halte yang belum disurvei pun tetap eksis secara fisik,
+// yang benar-benar membedakan baris ini adalah status SUDAH DISURVEI tim,
+// bukan keberadaan fisiknya (lihat juga layer KRL di bawah — eksis tapi
+// belum disurvei).
+function buildHaltePopupHtml(halte) {
+  const lines = [`<strong>${escapeHtml(halte?.nama || 'Halte Tersurvei')}</strong>`]
+  if (halte?.kecamatan) lines.push(escapeHtml(halte.kecamatan))
+  lines.push('<span style="color:#64748b">Halte tersurvei (koridor BisKita)</span>')
+  return lines.join('<br/>')
+}
+
+// Popup layer garis "Koridor BisKita (tersurvei)" — statis, sama untuk
+// seluruh garis (satu layer = satu pesan, lihat popupHtml di MapView.jsx).
+// Isi disclaimer diambil LANGSUNG dari kolom `catatan` baris
+// rute_transit_eksisting (ditulis data-ai-analyst) — bukan dikarang di
+// frontend — supaya kalau redaksinya direvisi di database, popup ikut
+// berubah tanpa perlu redeploy frontend.
+function buildBiskitaPopupHtml(catatan) {
+  const lines = [
+    '<strong>Koridor BisKita (tersurvei)</strong>',
+    '<span style="color:#b45309">Aproksimasi — bukan rute resmi operator/GTFS</span>',
+  ]
+  if (catatan) lines.push(escapeHtml(catatan))
+  return lines.join('<br/>')
+}
+
+// Popup layer garis jaringan KRL — statis (satu layer = satu pesan). Isi
+// diambil dari kolom `catatan` baris rute_transit_eksisting jenis='krl'
+// (identik di semua baris krl saat ini) — bukan dikarang di frontend.
+function buildKrlPopupHtml(catatan) {
+  const lines = [
+    '<strong>Jalur KRL Commuter Line</strong>',
+    '<span style="color:#64748b">Infrastruktur eksis — belum disurvei lapangan oleh tim</span>',
+  ]
+  if (catatan) lines.push(escapeHtml(catatan))
+  return lines.join('<br/>')
+}
+
+// Popup marker titik stasiun KRL — nama kolom `nama` di database untuk baris
+// ini kosong (spasi), jadi WAJIB fallback teks generik supaya popup tidak
+// blank (bukan bug, memang begitu datanya — lihat docs/DATA_CHECKLIST.md).
+function buildKrlStasiunPopupHtml(nama, catatan) {
+  const lines = [
+    `<strong>${escapeHtml(nama?.trim() ? nama.trim() : 'Stasiun KRL Commuter Line')}</strong>`,
+    '<span style="color:#64748b">Infrastruktur eksis — belum disurvei lapangan oleh tim</span>',
+  ]
+  if (catatan) lines.push(escapeHtml(catatan))
   return lines.join('<br/>')
 }
 
@@ -127,6 +255,120 @@ export default function App() {
   // jauh di atas jumlah baris riil saat ini) supaya seluruh titik_kandidat
   // ikut, bukan subset.
   const [caiPoints, setCaiPoints] = useState({ points: DEMO_CAI_POINTS, usingDemo: !isConfigured })
+
+  // Daftar halte_eksisting (jaringan transit eksisting, koridor BisKita) —
+  // fetch sekali di awal, sama polanya dengan caiPoints di atas, supaya
+  // acceptance criteria "Peta Multi-Layer Gap Analysis" (layer jaringan
+  // transit eksisting, lihat CLAUDE.md) benar-benar tampil di tab Peta
+  // Interaktif, bukan cuma di tab Analisis Spasial. Baris dummy/seed testing
+  // (id_halte_survei berprefix "DUMMY-HLT-") dibuang — lihat lib/halteEksisting.js.
+  const [haltePoints, setHaltePoints] = useState({ points: DEMO_HALTE_POINTS, usingDemo: !isConfigured })
+
+  useEffect(() => {
+    if (!isConfigured) return
+
+    supabase
+      .from('halte_eksisting')
+      .select('id, id_halte_survei, nama, geom, kecamatan, kelurahan')
+      .limit(500)
+      .then(({ data, error }) => {
+        if (error || !data?.length) {
+          setHaltePoints({ points: DEMO_HALTE_POINTS, usingDemo: true })
+          return
+        }
+        const points = data
+          .filter((row) => !isDummyHalte(row.id_halte_survei))
+          .map((row) => {
+            const coords = extractLatLon(row.geom)
+            if (!coords) return null
+            return { ...coords, nama: row.nama, kecamatan: row.kecamatan, kelurahan: row.kelurahan }
+          })
+          .filter(Boolean)
+
+        setHaltePoints(
+          points.length
+            ? { points, usingDemo: false }
+            : { points: DEMO_HALTE_POINTS, usingDemo: true }
+        )
+      })
+  }, [])
+
+  // Rute transit eksisting — 2 layer terpisah dari tabel rute_transit_eksisting
+  // (migration 013): koridor BisKita TERSURVEI (jenis='biskita_survei',
+  // LineString) dan jaringan KRL yang EKSIS TAPI BELUM DISURVEI tim
+  // (jenis='krl', campuran LineString ruas rel + Point stasiun). Fetch sekali
+  // di awal, sama polanya dengan haltePoints/caiPoints di atas. `nama` untuk
+  // sebagian baris krl memang kosong di database (bukan bug) — popup builder
+  // di atas (buildKrlPopupHtml/buildKrlStasiunPopupHtml) sudah fallback ke
+  // teks generik supaya tidak blank.
+  const [ruteTransit, setRuteTransit] = useState({
+    biskitaGeoJSON: DEMO_RUTE_BISKITA_GEOJSON,
+    biskitaPopupHtml: buildBiskitaPopupHtml(DEMO_RUTE_TRANSIT_DISCLAIMER),
+    krlLinesGeoJSON: DEMO_RUTE_KRL_GEOJSON,
+    krlPopupHtml: buildKrlPopupHtml(DEMO_RUTE_TRANSIT_DISCLAIMER),
+    krlStasiunPoints: DEMO_RUTE_KRL_STASIUN.map((s) => ({
+      ...s,
+      popupHtml: buildKrlStasiunPopupHtml(s.nama, DEMO_RUTE_TRANSIT_DISCLAIMER),
+    })),
+    usingDemo: !isConfigured,
+  })
+
+  useEffect(() => {
+    if (!isConfigured) return
+
+    supabase
+      .from('rute_transit_eksisting')
+      .select('id, nama, jenis, tipe_geometri, geom, sumber, catatan')
+      .limit(500)
+      .then(({ data, error }) => {
+        if (error || !data?.length) return // biarkan fallback demo di state awal
+
+        const biskitaRows = data.filter((r) => r.jenis === 'biskita_survei' && r.tipe_geometri === 'line')
+        const krlLineRows = data.filter((r) => r.jenis === 'krl' && r.tipe_geometri === 'line')
+        const krlPointRows = data.filter((r) => r.jenis === 'krl' && r.tipe_geometri === 'point')
+
+        const toLineFeatures = (rows) =>
+          rows
+            .map((row) => {
+              const coords = extractLineStringCoords(row.geom)
+              if (!coords?.length) return null
+              return {
+                type: 'Feature',
+                geometry: { type: 'LineString', coordinates: coords },
+                properties: { nama: row.nama?.trim() || null },
+              }
+            })
+            .filter(Boolean)
+
+        const biskitaFeatures = toLineFeatures(biskitaRows)
+        const krlLineFeatures = toLineFeatures(krlLineRows)
+
+        const krlStasiunPoints = krlPointRows
+          .map((row) => {
+            const coords = extractLatLon(row.geom)
+            if (!coords) return null
+            return {
+              ...coords,
+              nama: row.nama,
+              popupHtml: buildKrlStasiunPopupHtml(row.nama, row.catatan),
+            }
+          })
+          .filter(Boolean)
+
+        setRuteTransit({
+          biskitaGeoJSON: biskitaFeatures.length
+            ? { type: 'FeatureCollection', features: biskitaFeatures }
+            : DEMO_RUTE_BISKITA_GEOJSON,
+          biskitaPopupHtml: buildBiskitaPopupHtml(biskitaRows[0]?.catatan),
+          krlLinesGeoJSON: krlLineFeatures.length
+            ? { type: 'FeatureCollection', features: krlLineFeatures }
+            : DEMO_RUTE_KRL_GEOJSON,
+          krlPopupHtml: buildKrlPopupHtml(krlLineRows[0]?.catatan ?? krlPointRows[0]?.catatan),
+          krlStasiunPoints: krlStasiunPoints.length ? krlStasiunPoints : DEMO_RUTE_KRL_STASIUN,
+          usingDemo: !(biskitaFeatures.length || krlLineFeatures.length || krlStasiunPoints.length),
+        })
+      })
+  }, [])
 
   // Marker tunggal untuk lokasi yang baru diklik bebas (dipakai kedua mode:
   // simulasi & cek skor CAI di lokasi non-titik-kandidat)
@@ -245,7 +487,67 @@ export default function App() {
     popupHtml: buildCandidatePopupHtml(p.titik),
     onClick: () => handleMapClick({ lat: p.lat, lon: p.lon }),
   }))
-  const markers = clickMarker ? [...candidateMarkers, clickMarker] : candidateMarkers
+
+  // Marker halte tersurvei — warna ungu terpisah dari hijau/kuning titik
+  // kandidat di atas. onClick no-op (bukan () => undefined biasa) hanya untuk
+  // stopPropagation di MapView supaya klik marker tidak juga memicu
+  // handleMapClick di peta di baliknya (yang akan salah membuka panel skor
+  // CAI seolah halte ini adalah titik kandidat).
+  const halteMarkers = haltePoints.points.map((h) => ({
+    lat: h.lat,
+    lon: h.lon,
+    color: HALTE_TERSURVEI_MARKER_COLOR,
+    popupHtml: buildHaltePopupHtml(h),
+    onClick: () => {},
+  }))
+
+  // Marker titik stasiun KRL (jenis='krl', tipe_geometri='point') — sama pola
+  // stopPropagation seperti halteMarkers, warna biru RUTE_KRL_COLOR terpisah
+  // dari ungu halte tersurvei supaya beda status "eksis tapi belum disurvei"
+  // langsung terlihat tanpa buka popup dulu.
+  const krlStasiunMarkers = ruteTransit.krlStasiunPoints.map((s) => ({
+    lat: s.lat,
+    lon: s.lon,
+    color: RUTE_KRL_COLOR,
+    popupHtml: s.popupHtml,
+    onClick: () => {},
+  }))
+
+  const markers = [
+    ...halteMarkers,
+    ...krlStasiunMarkers,
+    ...candidateMarkers,
+    ...(clickMarker ? [clickMarker] : []),
+  ]
+
+  // Layer garis rute transit eksisting — 2 layer terpisah dengan visual jelas
+  // berbeda (lihat konstanta warna RUTE_BISKITA_COLOR/RUTE_KRL_COLOR di atas).
+  // BisKita: solid tebal (line-width 5, tanpa dasharray) supaya jelas beda
+  // bentuk juga dari KRL (dashed, lebih tipis) — bukan cuma beda warna.
+  // popupHtml statis per layer (bukan per-fitur) — cukup untuk kasus "satu
+  // layer = satu pesan disclaimer/status", lihat dukungan popupHtml generik
+  // di MapView.jsx.
+  const ruteLayers = [
+    {
+      id: 'rute-biskita-tersurvei',
+      type: 'line',
+      data: ruteTransit.biskitaGeoJSON,
+      paint: { 'line-color': RUTE_BISKITA_COLOR, 'line-width': 5, 'line-opacity': 0.9 },
+      popupHtml: ruteTransit.biskitaPopupHtml,
+    },
+    {
+      id: 'rute-krl-eksisting',
+      type: 'line',
+      data: ruteTransit.krlLinesGeoJSON,
+      paint: {
+        'line-color': RUTE_KRL_COLOR,
+        'line-width': 3,
+        'line-opacity': 0.85,
+        'line-dasharray': [2, 1.5],
+      },
+      popupHtml: ruteTransit.krlPopupHtml,
+    },
+  ]
 
   return (
     <div className="h-screen w-screen flex flex-col bg-slate-50">
@@ -287,7 +589,12 @@ export default function App() {
 
         {/* Map */}
         <main className="flex-1 relative">
-          <MapView simulationMode={simulationActive} onMapClick={handleMapClick} markers={markers}>
+          <MapView
+            simulationMode={simulationActive}
+            onMapClick={handleMapClick}
+            markers={markers}
+            layers={ruteLayers}
+          >
             <CaiScorePanel
               loading={caiLoading}
               result={caiResult}
@@ -297,6 +604,17 @@ export default function App() {
                 setClickMarker(null)
               }}
             />
+            {activeTab === 'peta' && (
+              <MapLegend
+                items={[
+                  { color: HALTE_TERSURVEI_MARKER_COLOR, shape: 'dot', label: 'Halte tersurvei' },
+                  { color: RUTE_BISKITA_COLOR, shape: 'line', lineStyle: 'solid', label: 'Koridor BisKita (tersurvei, garis aproksimasi)' },
+                  { color: RUTE_KRL_COLOR, shape: 'line', lineStyle: 'dashed', label: 'Jaringan KRL (eksis, belum disurvei)' },
+                  { color: CANDIDATE_MARKER_COLOR, shape: 'dot', label: 'Usulan lokasi baru (skor CAI final)' },
+                  { color: CANDIDATE_MARKER_COLOR_PLACEHOLDER, shape: 'dot', label: 'Usulan lokasi baru (sebagian skor sementara)' },
+                ]}
+              />
+            )}
           </MapView>
         </main>
 

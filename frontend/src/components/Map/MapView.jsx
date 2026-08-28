@@ -56,10 +56,15 @@ if (!(MAPID_STYLE_BASE && MAPID_API_KEY)) {
  *    didahulukan dari popupText. onClick (opsional) dipanggil saat marker
  *    itu sendiri diklik langsung (bukan cuma klik peta lalu dicari terdekat)
  *    — dipakai supaya titik_kandidat bisa langsung dipilih dari markernya.
- *  - layers: array of { id, type: 'fill'|'line'|'circle', data: GeoJSON, paint?, layout?, visible? }
- *    — generic GeoJSON layer, dipakai untuk multi-layer gap analysis (Analisis
- *    Spasial). Sengaja generik (bukan hardcode nama layer) supaya dipakai
- *    ulang oleh instance MapView manapun tanpa menambah pola integrasi baru.
+ *  - layers: array of { id, type: 'fill'|'line'|'circle', data: GeoJSON, paint?, layout?,
+ *    visible?, popupHtml? } — generic GeoJSON layer, dipakai untuk multi-layer gap
+ *    analysis (Analisis Spasial) maupun layer rute transit (Peta Interaktif, lihat
+ *    App.jsx). Sengaja generik (bukan hardcode nama layer) supaya dipakai ulang oleh
+ *    instance MapView manapun tanpa menambah pola integrasi baru. `popupHtml` opsional:
+ *    kalau diisi, klik pada FITUR APA PUN di layer itu akan menampilkan popup statis
+ *    berisi HTML ini (dipakai mis. untuk disclaimer "rute aproksimasi, bukan resmi
+ *    operator" pada layer koridor BisKita) — bukan popup per-fitur individual seperti
+ *    `markers`, cukup untuk kasus satu layer = satu pesan seragam.
  *  - children: overlay opsional yang dirender di atas canvas peta (mis.
  *    <CaiScorePanel>) — diposisikan absolute di dalam container relative,
  *    tidak menggantikan canvas MapLibre. Kalau tidak dikirim (mis. dipakai
@@ -107,12 +112,33 @@ export default function MapView({
     if (!map) return
 
     const handleClick = (e) => {
+      // Prioritaskan layer GeoJSON generik yang punya popupHtml (mis. disclaimer
+      // rute BisKita — lihat App.jsx) sebelum meneruskan ke onMapClick. Dicek
+      // lewat queryRenderedFeatures di DALAM handler klik generik yang sama
+      // (bukan map.on('click', layerId, ...) terpisah) supaya urutan eksekusi
+      // deterministik — MapLibre tidak menjamin urutan antar listener 'click'
+      // kalau didaftarkan lewat pemanggilan map.on() yang berbeda.
+      const clickableLayerIds = layers
+        .filter((l) => l.popupHtml && l.visible !== false && map.getLayer(l.id))
+        .map((l) => l.id)
+
+      if (clickableLayerIds.length) {
+        const hits = map.queryRenderedFeatures(e.point, { layers: clickableLayerIds })
+        if (hits.length) {
+          const hitLayer = layers.find((l) => l.id === hits[0].layer.id)
+          if (hitLayer?.popupHtml) {
+            new Popup({ offset: 8 }).setLngLat(e.lngLat).setHTML(hitLayer.popupHtml).addTo(map)
+            return
+          }
+        }
+      }
+
       onMapClick?.({ lat: e.lngLat.lat, lon: e.lngLat.lng })
     }
 
     map.on('click', handleClick)
     return () => map.off('click', handleClick)
-  }, [onMapClick])
+  }, [onMapClick, layers])
 
   // Update cursor supaya jelas kapan mode simulasi aktif
   useEffect(() => {

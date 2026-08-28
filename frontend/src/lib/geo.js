@@ -137,6 +137,80 @@ function parseWkbPolygon(hex) {
 }
 
 /**
+ * Konversi hex string EWKB LineString (format default PostGIS via PostgREST)
+ * atau objek GeoJSON LineString menjadi array koordinat GeoJSON-style
+ * ([[lon,lat], ...]). Return null kalau format tidak dikenali atau bukan tipe
+ * LineString. Sama seperti extractLatLon/extractPolygonRings di atas: murni
+ * format-parsing untuk kebutuhan render layer di peta (mis. `rute_transit_eksisting`
+ * — koridor BisKita tersurvei & jaringan rel KRL, lihat App.jsx), TIDAK
+ * menghitung ulang CAI/TDI/Equity Index.
+ * Catatan: per verifikasi langsung 28 Agustus 2026 (lihat docs/DATA_CHECKLIST.md),
+ * `rute_transit_eksisting.geom` dikembalikan PostgREST sebagai dict GeoJSON
+ * (bukan WKB hex) — cabang objek di bawah yang sebenarnya kepakai di produksi;
+ * parser WKB tetap disediakan untuk konsistensi/robustness kalau konfigurasi
+ * kolom berubah di masa depan.
+ */
+export function extractLineStringCoords(geom) {
+  if (!geom) return null
+
+  if (typeof geom === 'object' && geom.type === 'LineString' && Array.isArray(geom.coordinates)) {
+    return geom.coordinates
+  }
+
+  if (typeof geom === 'string') {
+    return parseWkbLineString(geom)
+  }
+
+  return null
+}
+
+function parseWkbLineString(hex) {
+  try {
+    const clean = hex.trim()
+    if (clean.length < 18) return null
+
+    const bytes = new Uint8Array(clean.length / 2)
+    for (let i = 0; i < bytes.length; i++) {
+      bytes[i] = parseInt(clean.substr(i * 2, 2), 16)
+    }
+    const view = new DataView(bytes.buffer)
+
+    let offset = 0
+    const byteOrder = view.getUint8(offset)
+    offset += 1
+    const little = byteOrder === 1
+
+    const readUint32 = () => {
+      const v = little ? view.getUint32(offset, true) : view.getUint32(offset, false)
+      offset += 4
+      return v
+    }
+    const readFloat64 = () => {
+      const v = little ? view.getFloat64(offset, true) : view.getFloat64(offset, false)
+      offset += 8
+      return v
+    }
+
+    const type = readUint32()
+    const hasSrid = (type & 0x20000000) !== 0
+    const geomType = type & 0xff
+    if (hasSrid) readUint32() // asumsi SRID 4326 (sesuai skema migration 001) — buang saja
+    if (geomType !== 2) return null // hanya dukung LineString
+
+    const numPoints = readUint32()
+    const coords = []
+    for (let p = 0; p < numPoints; p++) {
+      const x = readFloat64()
+      const y = readFloat64()
+      coords.push([x, y]) // GeoJSON: [lon, lat]
+    }
+    return coords
+  } catch {
+    return null
+  }
+}
+
+/**
  * Bounding box kasar {minLat, maxLat, minLon, maxLon} dari exterior ring
  * (rings[0]) hasil extractPolygonRings. Dipakai untuk pendekatan filter
  * "titik grid termasuk kecamatan mana" tanpa perlu true point-in-polygon —

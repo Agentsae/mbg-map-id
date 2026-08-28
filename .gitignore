@@ -1,3 +1,6 @@
+# ===== Office lock/temp files (dibuat otomatis saat file Excel/Word dibuka) =====
+~$*
+
 # ===== Python =====
 __pycache__/
 *.py[cod]

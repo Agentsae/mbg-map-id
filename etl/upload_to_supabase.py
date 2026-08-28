@@ -431,11 +431,82 @@ def load_halte_survey_excel(path: str, sheet_name: str = "Form Kondisi Halte") -
     kolom mentah (checklist J-N, headway P/Q, okupansi S) memakai formula
     yang identik — bukan dibaca dari cache — supaya hasilnya konsisten
     apa pun status cache filenya.
+
+    GUARD ID DUPLIKAT (ditambahkan 28 Agustus 2026): ditemukan `HLT-001`
+    terpakai untuk 2 baris berbeda ("Halte Summarecon Bekasi" &
+    "Halte Simpang Pekayon") di file instrumen survei asli. Kalau ini
+    lolos tanpa dicek, `upload_halte_data()` (upsert
+    `on_conflict='id_halte_survei'`) akan diam-diam MENIMPA salah satu
+    titik dengan titik lain — baris terakhir menang, baris pertama HILANG
+    tanpa peringatan apa pun. Fungsi ini SEKARANG memindai seluruh ID
+    Halte lebih dulu dan **raise ValueError + hentikan total (0 baris
+    diproses)** kalau ada ID yang muncul >1 kali, supaya siapa pun yang
+    menjalankan ETL ini sadar perlu ID unik dari tim survei dulu — bukan
+    sistem yang menebak/mendiamkan salah satu titik dianggap "kalah".
+    File Excel sumber TIDAK BOLEH diedit langsung oleh ETL ini (itu jejak
+    audit data lapangan asli tim survei) — perbaikan ID unik harus datang
+    dari tim survei sendiri.
     """
     import openpyxl
+    from collections import defaultdict
 
     wb = openpyxl.load_workbook(path, data_only=True)
     ws = wb[sheet_name]
+
+    # --- Pemindaian pertama: kumpulkan semua ID Halte + baris asalnya,
+    # SEBELUM baris mana pun difilter/diproses, supaya duplikat tetap
+    # terdeteksi walau salah satu baris duplikatnya kebetulan tidak
+    # punya koordinat (kasus HLT-001 di atas: baris pertama ada
+    # koordinat, baris kedua kosong — kalau cek duplikat dilakukan
+    # SETELAH filter lat/lon kosong, duplikat ini akan lolos tak
+    # terdeteksi karena baris kedua sudah lebih dulu disingkirkan).
+    #
+    # Sengaja mulai dari baris 3 (bukan 4): di praktiknya baris 3 — yang
+    # menurut desain instrumen seharusnya "CONTOH" placeholder — di file
+    # ini justru berisi data yang terlihat seperti entri asli (nama
+    # surveyor & tanggal survei terisi, bukan teks contoh generik).
+    # Konvensi loop produksi di bawah TETAP mulai dari baris 4 (perilaku
+    # lama, tidak diubah — memutuskan apakah baris 3 boleh ikut jadi
+    # data upload sungguhan adalah keputusan tim survei, bukan wewenang
+    # ETL ini). Tapi untuk DETEKSI DUPLIKAT saja, baris 3 tetap harus
+    # ikut dipindai — kalau tidak, tabrakan ID persis seperti kasus
+    # HLT-001 (baris 3 vs baris 4) tidak akan pernah terlihat oleh guard
+    # ini sama sekali.
+    id_to_rows = defaultdict(list)
+    scan_row = 3
+    while True:
+        raw_id = ws.cell(row=scan_row, column=1).value
+        if raw_id is None:
+            break
+        id_to_rows[str(raw_id)].append((
+            scan_row,
+            ws.cell(row=scan_row, column=2).value,  # Nama Halte / Titik
+            ws.cell(row=scan_row, column=3).value,  # Kecamatan
+            ws.cell(row=scan_row, column=4).value,  # Kelurahan
+        ))
+        scan_row += 1
+
+    duplikat = {k: v for k, v in id_to_rows.items() if len(v) > 1}
+    if duplikat:
+        detail = []
+        for dup_id, rows in duplikat.items():
+            baris_desc = "; ".join(
+                f"baris {r} ('{nama}', kec. {kec}/kel. {kel})"
+                for r, nama, kec, kel in rows
+            )
+            detail.append(f"  - ID Halte '{dup_id}' muncul {len(rows)}x: {baris_desc}")
+        raise ValueError(
+            "GAGAL memuat 'Form Kondisi Halte': ditemukan ID Halte DUPLIKAT di "
+            f"'{path}' (sheet '{sheet_name}'). ETL DIHENTIKAN TOTAL — 0 baris "
+            "diproses/diupload — supaya upsert on_conflict='id_halte_survei' "
+            "TIDAK diam-diam menimpa salah satu titik dengan titik lainnya.\n"
+            + "\n".join(detail)
+            + "\n\nTINDAK LANJUT: file sumber ini TIDAK BOLEH diedit oleh ETL "
+              "(jejak audit data lapangan tim survei) — minta tim survei "
+              "memberi ID UNIK untuk tiap baris di atas (mis. ID kedua jadi "
+              "'HLT-001b' atau nomor urut baru yang belum dipakai), baru "
+              "jalankan ulang ETL ini."
+        )
 
     records = []
     row_num = 4  # baris 1=header, 2=instruksi, 3=contoh -> data asli mulai baris 4
@@ -511,7 +582,31 @@ def upload_halte_data(client, records: list):
     Upload hasil load_halte_survey_excel() ke tabel halte_eksisting.
     Pakai upsert on_conflict='id_halte_survei' supaya aman dijalankan
     berulang kali (re-run setelah data survei direvisi) tanpa duplikat.
+
+    GUARD tambahan (defense-in-depth, 28 Agustus 2026): cek ulang
+    `id_halte_survei` duplikat di `records` di sini juga — bukan cuma
+    di load_halte_survey_excel(). Kalau suatu saat `records` dibangun
+    dari jalur lain (mis. digabung manual dengan
+    koordinat_halte_koridor_biskita.csv) yang tidak lewat guard loader
+    di atas, upsert on_conflict='id_halte_survei' TETAP tidak boleh
+    diam-diam menimpa satu baris dengan baris lain tanpa peringatan.
     """
+    if records:
+        seen = {}
+        dup_ids = set()
+        for r in records:
+            rid = r.get("id_halte_survei")
+            if rid in seen:
+                dup_ids.add(rid)
+            seen[rid] = r
+        if dup_ids:
+            raise ValueError(
+                "GAGAL upload halte_eksisting: ditemukan id_halte_survei "
+                f"DUPLIKAT di 'records' ({sorted(dup_ids)}). Upload DIBATALKAN "
+                "total supaya upsert tidak diam-diam menimpa satu baris dengan "
+                "baris lain — beri ID unik dulu sebelum upload."
+            )
+
     if not records:
         print("Tidak ada baris halte_eksisting yang diupload (records kosong).")
         return None

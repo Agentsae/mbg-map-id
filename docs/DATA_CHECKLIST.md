@@ -8,6 +8,364 @@
 **Hari ini: 28 Agustus 2026 — 16 hari ke submission.** Field Day 3 (survei terakhir):
 29-30 Agustus — **tinggal 1-2 hari**.
 
+## ✅ Update 28 Agustus (lanjutan, terbaru) — rute BisKita sekarang mengikuti jaringan jalan (OSRM), bukan garis lurus
+
+`data-ai-analyst` mengganti geometri `rute_transit_eksisting` id=1 (`jenis='biskita_survei'`)
+dari LineString garis lurus 15-titik (chord langsung antar `HLT-001`→`HLT-015`) menjadi rute
+yang mengikuti jaringan jalan sungguhan, dibangun dengan **Opsi A: OSRM public routing API**
+(`router.project-osrm.org/route/v1/driving`, data jalan OpenStreetMap) — dicoba lebih dulu
+sesuai instruksi, terbukti reliable (semua 14 segmen berhasil di percobaan pertama, tidak
+perlu fallback ke Opsi B/graph `JALAN_LN_25K` + networkx).
+
+**Metode**: 14 segmen dihitung terpisah (HLT-001→002, 002→003, …, 014→015), tiap segmen
+di-request ke OSRM profile `driving` (bus jalan di jalan raya, bukan jalur pejalan kaki),
+hasil geometri tiap segmen disambung jadi satu LineString penuh (titik duplikat di
+sambungan segmen dibuang). `UPDATE` langsung ke baris `id=1` (bukan insert baru) via
+`supabase-py`, `id` dan riwayat baris dipertahankan.
+
+**Panjang rute**: garis lurus lama ~15,44 km total → rute jalan baru **~18,05 km**
+(rasio 1,17x — masuk akal untuk jalan mengikuti jaringan jalan kota, jauh di bawah
+ambang batas curiga 3x). Rincian per segmen (OSRM, jarak jalan): 001→002 1085m,
+002→003 138m, 003→004 3342m, 004→005 2000m, 005→006 27m, 006→007 1958m, 007→008 22m,
+008→009 223m, 009→010 11m, 010→011 3223m, 011→012 2319m, 012→013 13m, 013→014 3603m,
+014→015 82m. Semua 14 segmen sukses, 0 fallback garis lurus.
+
+**Disclaimer dipertahankan & diperbarui** di kolom `sumber`/`catatan` baris id=1 —
+tetap menyatakan ini APROKSIMASI (bukan GeoJSON/KMZ rute resmi operator BisKita/Dishub,
+tim tidak punya data itu), sekarang eksplisit menyebut metode routing (OSRM/OpenStreetMap,
+profile driving) dan angka panjang rute vs garis lurus, plus catatan lama soal pola
+urutan tidak sepenuhnya monoton (kemungkinan rute PP/dua-arah) tetap dipertahankan apa
+adanya.
+
+**Script ETL diperbarui**: `etl/build_rute_transit_eksisting.py` sekarang membangun rute
+BisKita lewat fungsi baru `route_road_network()` (helper `_osrm_route_segment()` per
+segmen dengan retry 3x, `_haversine_m()` untuk sanity-check rasio) — kalau di-re-run
+nanti (misal ada halte baru dari Field Day 3), otomatis pakai OSRM routing lagi, TIDAK
+akan kembali menghasilkan garis lurus. Segmen yang gagal di-routing (OSRM down/rate
+limit) fallback ke garis lurus **hanya untuk segmen itu**, dicatat jumlahnya di
+`sumber`/`catatan` yang diupload (transparan, bukan disembunyikan). `requests` ditambah
+ke `etl/requirements.txt` (dipakai langsung sekarang, sebelumnya cuma dependency
+transitif). Dry-run script ini sudah dijalankan ulang setelah perubahan dan hasilnya
+cocok persis dengan angka manual di atas (18,05km, rasio 1,17x, 0 fallback).
+
+**Verifikasi live**: dicek ulang lewat `supabase-py` setelah update — baris `id=1` sekarang
+punya 730 titik koordinat (naik dari 15), titik awal/akhir tidak berubah (masih di
+HLT-001/HLT-015), `sumber`/`catatan` sudah berisi teks metode baru.
+
+**Catatan untuk Sam**: kalau `etl/build_rute_transit_eksisting.py --upload` dijalankan
+ulang di masa depan (bukan hanya untuk B1), skrip ini memakai pola delete-lalu-insert
+per `jenis` (idempotent tapi row `id` akan berganti, bukan tetap `id=1`) — beda dengan
+`UPDATE` satu-kali yang dipakai untuk perbaikan hari ini. Ini pola lama yang sudah ada
+sebelum perubahan ini, bukan regresi baru, tapi dicatat di sini supaya jelas kapan `id`
+row BisKita bisa berubah.
+
+> **✅ RESOLVED (dicek ulang saat mengerjakan update di atas)**: `npx supabase migration
+> list --project-ref=vpymlmaebvfmpowomsec` sekarang menunjukkan `local`/`remote` sama-sama
+> sampai `013` — migration 012 (fix `simulate_new_stop`) dan 013 (tabel
+> `rute_transit_eksisting`) SUDAH diterapkan Sam ke database produksi (kapan persisnya
+> tidak tercatat di sini, ditemukan sudah applied). Blocker "BELUM DITERAPKAN" di entri
+> di bawah ini SUDAH TIDAK BERLAKU. Entri lama dipertahankan apa adanya untuk riwayat.
+
+## ⚠️⚠️ Update 28 Agustus (malam) — dummy data DIHAPUS dari database; BLOCKER KRITIS ditemukan & migration perbaikan ditulis TAPI BELUM DITERAPKAN (butuh Sam manual)
+
+`data-ai-analyst` menjalankan 2 tugas dari Sam: (A) hapus semua baris dummy/sintetis
+dari database, (B) siapkan 2 layer transit eksisting untuk peta (rute BisKita survei +
+KRL).
+
+### Tugas A — Dummy dihapus, hasil per tabel
+
+Inventarisasi ulang lewat query (bukan asumsi dari memori) sebelum hapus, lalu DELETE
+via `supabase-py` (DML, bukan lewat CLI yang kena blocker classifier — lihat di bawah).
+Cascade FK (`penduduk.kelurahan_id`, `skor_equity.kelurahan_id` → `batas_administrasi.id`
+ON DELETE CASCADE; `skor_cai.titik_kandidat_id` → `titik_kandidat.id` ON DELETE CASCADE)
+diverifikasi benar dari skema (`001_init_tables.sql`) sebelum dieksekusi, bukan
+diasumsikan:
+
+| Tabel | Sebelum | Dummy dihapus | Sesudah (REAL) |
+|---|---|---|---|
+| `batas_administrasi` | 62 | 6 (`sumber ilike 'DATA SINTETIS%'`) | **56** |
+| `penduduk` | 80 | 24 (cascade dari 6 kelurahan dummy) | **56** |
+| `skor_equity` | 61 | 5 (cascade dari 6 kelurahan dummy; diverifikasi tidak ada baris equity dummy yang FK ke kelurahan REAL — 56 baris FK real semuanya bersumber `REAL - ...`) | **56** |
+| `titik_kandidat` | 12 | 4 (`id_titik_survei` prefix `KND-DEMO-`) | **8** |
+| `skor_cai` | 12 | 4 (cascade dari 4 titik_kandidat demo) | **8** |
+| `halte_eksisting` | 21 | 6 (`id_halte_survei` prefix `DUMMY-HLT-`) | **15** |
+| `poi` | 776 | **13** (`sumber ilike 'DATA SINTETIS%'` — DITEMUKAN saat audit, TIDAK ada di daftar eksplisit Sam tapi cocok kriteria "tabel lain yang mungkin punya dummy", ikut dihapus) | **763** (330 sekolah + 162 faskes + 271 kerja OSM, cocok catatan Kategori B sebelumnya) |
+| `grid_analisis` | 2.607 | 0 (tidak ada dummy, sudah 100% dasymetric real sejak 27 Agu) | 2.607 (tidak berubah) |
+| `konfigurasi_bobot` | 13 | 0 (tidak ada dummy, semua 13 baris hasil review mentor) | 13 (tidak berubah) |
+
+Verifikasi akhir: 0 baris dummy tersisa di semua tabel di atas (dicek ulang query
+`ilike`/prefix match setelah delete), jumlah baris REAL tidak berkurang dari yang
+dicatat di update-update sebelumnya di file ini.
+
+**Cek fallback DB sebelum hapus (poin 3 instruksi Sam) — TIDAK ditemukan kode frontend
+yang bergantung pada baris dummy DI DATABASE sebagai fallback** (`DEMO_CAI_POINTS`/
+`DEMO_HALTE_POINTS` yang ada di frontend adalah hardcode client-side, tidak query DB,
+aman seperti diduga Sam).
+
+### 🔴 TAPI ditemukan blocker fungsional NYATA (bukan di frontend, di RPC backend) — `simulate_new_stop()`
+
+RPC `simulate_new_stop()` (`003_simulate_new_stop.sql`, dipakai fitur "Simulasi
+What-If" live di `frontend/src/components/SimulationMode/SimulationPanel.jsx`)
+menghitung `penduduk_terlayani_400m/800m` dengan `ST_DWithin` terhadap
+**`penduduk.geom`** (titik). Dicek langsung: **56 baris REAL `penduduk` (Disdukcapil,
+`etl/load_penduduk.py`) semuanya agregat PER KELURAHAN — `geom` SELALU NULL.** Hanya
+24 baris DUMMY lama (6 kelurahan fiktif) yang punya `geom` titik terisi.
+
+Konsekuensinya: RPC ini **sudah tidak pernah mengembalikan populasi > 0 di luar 6 bbox
+dummy itu sejak data real diupload** (bug lama, belum pernah dilaporkan) — dan begitu
+baris dummy dihapus (poin di atas), RPC ini akan **SELALU mengembalikan 0 di SELURUH
+Kota Bekasi**, merusak total fitur What-If (acceptance criteria PRD Bab 8).
+
+**Perbaikan ditulis**: `supabase/migrations/012_fix_simulate_new_stop_population_source.sql`
+— redefinisi fungsi (`create or replace`), ganti sumber populasi dari `penduduk`
+(titik, kosong utk data real) ke **`grid_analisis`** (2.607 cell 300x300m, dasymetric
+real, sudah mencakup 56 kelurahan) — dijumlah per radius (400m/800m) dengan **prorata
+luas irisan cell↔lingkaran** (areal interpolation, bukan all-or-nothing centroid),
+supaya cell yang sebagian di dalam/luar radius tidak dihitung penuh/nol secara kasar.
+Bagian lain fungsi (jarak halte terdekat, POI faskes/sekolah 400m) tidak diubah — itu
+sudah bergantung pada data real (`halte_eksisting`, `poi`) yang tidak terpengaruh
+penghapusan dummy.
+
+**⚠️ BELUM DITERAPKAN ke database produksi** — `npx supabase db push` ditolak
+permission classifier sesi ini (konsisten dengan blocker sesi-sesi sebelumnya untuk
+`db push`/`functions deploy`). **Sampai Sam menjalankan ini manual, fitur Simulasi
+What-If mengembalikan 0 penduduk terlayani di SELURUH kota** — ini prioritas TINGGI,
+lebih mendesak dari isu lain di file ini karena regresi baru terjadi HARI INI akibat
+penghapusan dummy.
+
+**Perintah manual untuk Sam** (jalankan di terminal sendiri, bukan lewat sesi chat):
+```
+npx supabase db push --project-ref=vpymlmaebvfmpowomsec
+```
+Ini akan menerapkan migration 012 (fix di atas) **dan** 013 (tabel baru layer transit,
+lihat Tugas B di bawah) sekaligus — `npx supabase migration list --project-ref=vpymlmaebvfmpowomsec`
+sudah dicek, remote saat ini persis di 011, jadi push ini aman/idempotent (tidak akan
+mengulang 001-011). Alternatif kalau CLI push tetap gagal: copy-paste isi kedua file
+itu (urut: 012 dulu, baru 013) ke Supabase SQL Editor.
+
+Uji setelah diterapkan: `select simulate_new_stop(-6.2185, 107.0074);` — diharapkan
+`penduduk_terlayani_400m/800m` > 0 (sebelumnya akan 0).
+
+### Tugas B — 2 layer transit eksisting (BisKita survei + KRL)
+
+**Keputusan struktur data: tabel baru `rute_transit_eksisting`** (bukan file GeoJSON
+statis di `frontend/public/`), migration `013_rute_transit_eksisting.sql` — konsisten
+dengan pola arsitektur proyek ini (semua layer spasial lain lewat Supabase/PostGIS +
+RLS baca-publik, bukan file statis), dan supaya metadata kejujuran sumber
+(`sumber`/`catatan`) tersimpan satu tempat dengan datanya. Kolom `geom` sengaja
+`geometry(Geometry, 4326)` (untyped, bukan LineString/Point tunggal) karena tabel ini
+menampung KEDUA jenis geometri (rute BisKita = LineString, KRL = LineString rel + Point
+stasiun) dibedakan lewat kolom `jenis` (`biskita_survei`/`krl`) + `tipe_geometri`
+(`line`/`point`) sebagai bantuan eksplisit untuk frontend. RLS: publik boleh baca saja,
+sama seperti tabel lain.
+
+Script ETL baru: `etl/build_rute_transit_eksisting.py` (dry-run sudah dijalankan &
+diverifikasi, **upload sungguhan BELUM jalan** — nunggu migration 013 diterapkan,
+lihat blocker di atas):
+
+- **B1 (BisKita, 15 titik)**: LineString dibangun dari `halte_eksisting` REAL
+  (bukan CSV survei lagi — diambil dari tabel live yang sudah diperbaiki labelnya,
+  lihat bug rotate-by-one di update sebelumnya), diurutkan `id_halte_survei`
+  HLT-001→HLT-015. **Verifikasi koherensi spasial** (diminta eksplisit sebelum
+  dipakai): total panjang jalur berurutan ~15,4 km, seluruh 15 titik berada dalam
+  koridor sempit (rentang longitude hanya ~1 km, 106.983–106.993) dengan latitude
+  bergerak progresif dari -6.2556 (utara) ke -6.3105 (selatan, titik terselatan di
+  HLT-009/010) — POLA KOHEREN (satu koridor utara-selatan), TAPI urutan **tidak
+  sepenuhnya monoton**: HLT-011 (-6.2834) dan HLT-014/015 (-6.2724) kembali ke utara
+  setelah HLT-009/010 yang lebih selatan, kemungkinan mencerminkan pola penyusuran
+  pergi-pulang (PP)/dua-arah, bukan garis lurus tunggal. **Disclaimer ini ditulis
+  eksplisit di kolom `catatan` baris yang diupload** — TIDAK disajikan sebagai rute
+  resmi GTFS/KMZ operator (tim tidak punya data itu sama sekali), label `sumber` juga
+  menyatakan ini APROKSIMASI.
+- **B2 (KRL, REAL, dari BIG RBI 25K)**: `STASIUNKA_PT_25K` (1 titik, Stasiun Bekasi)
+  + `RELKA_LN_25K` (33 ruas total di seluruh Kab. Bekasi, **12 ruas beririsan dengan
+  Kota Bekasi**, dipotong presisi ke boundary union 56 kelurahan RBI real — bukan
+  cuma difilter, tapi di-`intersection()` supaya ruas yang sebagian di luar kota tidak
+  ikut tergambar; menghasilkan **13 baris LineString** setelah 1 ruas MultiLineString
+  pecah jadi 2 part). Total **14 baris jenis='krl'** (1 stasiun + 13 ruas) siap upload.
+  Sumber & catatan eksplisit menyatakan "REAL, existing infrastructure, belum
+  disurvei tim" — beda status dengan BisKita yang disurvei lapangan.
+- **B3 (moda lain)**: `TERMINALBUS_PT_25K` dicek (bukan diupload) — **1 titik total di
+  seluruh Kab. Bekasi di .gdb, 0 di dalam Kota Bekasi** setelah clip ke boundary.
+  Dikonfirmasi ULANG (independen dari catatan lama di file ini) — **tidak ada data
+  rute/terminal resmi untuk Transjakarta/Damri/angkot** di sumber data yang tersedia.
+  Tidak ada data dikarang untuk mengisi kekosongan ini — kalau Sam ingin moda ini
+  ditambahkan ke peta, perlu sumber terpisah (GTFS Transjakarta publik, atau data
+  trayek Damri/angkot dari Dishub Kota Bekasi langsung).
+
+**Setelah migration 012+013 diterapkan Sam**, jalankan:
+```
+python etl/build_rute_transit_eksisting.py --upload
+```
+untuk benar-benar menulis 1 baris BisKita + 14 baris KRL ke `rute_transit_eksisting`.
+
+> **✅ Status per update "rute BisKita sekarang mengikuti jaringan jalan" di atas**: sudah
+> dijalankan — `rute_transit_eksisting` sekarang berisi **15 baris total**: 1 baris
+> `biskita_survei` (LineString rute jalan, lihat update di atas) + 14 baris `krl`
+> (13 `line` ruas rel + 1 `point` Stasiun Bekasi). Dicek langsung dari DB, bukan asumsi.
+
+## ✅ Update 28 Agustus (malam, lanjutan): bug rotate-by-one pada `halte_eksisting` (14/15 baris REAL) diperbaiki
+
+`qa-tester` menemukan (diverifikasi ulang independen oleh `data-ai-analyst`): 14 dari 15 baris
+`halte_eksisting` REAL (`HLT-001`..`HLT-015`) punya `id_halte_survei`/`nama` yang TIDAK cocok
+dengan koordinatnya — hanya `HLT-001` yang benar.
+
+**Root cause**: sesuai catatan di entri "Cek status live database" di bawah, 15 baris ini
+diupload lewat **jalur ad-hoc di sesi sebelumnya** (bukan `load_halte_survey_excel()`/
+`upload_halte_data()` yang ada di `etl/upload_to_supabase.py` saat ini — kode itu justru akan
+skip semua 15 baris karena Latitude/Longitude kosong di Excel yang sekarang). Skrip ad-hoc itu
+**tidak pernah masuk repo** jadi baris kodenya sendiri tidak bisa ditelusuri persis, tapi pola
+datanya membongkar bentuk bug-nya: **bukan geser-satu sederhana**, melainkan **rotasi** — dalam
+urutan CSV sumber (`etl/data/survei/koordinat_halte_koridor_biskita.csv`, indeks 0=HLT-001 s.d.
+14=HLT-015), koordinat yang ter-upload berurutan persis `[CSV[0], CSV[2], CSV[3], ..., CSV[14],
+CSV[1]]` — yaitu CSV asli dengan baris `HLT-002` (indeks 1) dipindah dari posisinya ke paling
+akhir. Ciri ini konsisten dengan proses "gabung by name, bukan by koordinat" yang disebut di
+entri di bawah: kalau nama `HLT-002` ("Halte Pekayon Ahmad Yani") gagal match tepat pada pass
+pertama (mis. karena penulisan nama Excel vs CSV sedikit beda) lalu di-retry/ditaruh di akhir
+antrian, hasilnya persis rotasi yang teramati — **bukan** bug `zip()` off-by-one klasik. Efeknya:
+`id_halte_survei` dan `nama` 14 baris tertukar satu sama lain, tapi **koordinat (`geom`) semua
+baris tetap benar sejak awal** (tidak pernah salah).
+
+**Dampak ke skor**: NIHIL. Semua perhitungan hilir yang memakai `halte_eksisting`
+(`compute_tdi_full.py` — jarak grid ke halte via `sjoin_nearest` pada `geom`; `skor_survei` yang
+dipakai `compute_scores.py`) bergantung pada **koordinat**, bukan `id_halte_survei`/`nama` — dan
+koordinat tidak pernah salah. `skor_tdi`, `skor_cai`, `skor_equity` yang sudah live **tidak perlu
+dihitung ulang**.
+
+**Perbaikan**: `UPDATE` in-place per baris (PK `id` tidak berubah, `geom` tidak disentuh sama
+sekali) — dicocokkan ke CSV sumber **berdasarkan koordinat** (toleransi 1e-5°), bukan
+`id_halte_survei` yang justru sedang salah. Karena `id_halte_survei` punya `UNIQUE` constraint
+(`001_init_tables.sql` baris 60) dan bug-nya berbentuk rotasi (nilai final satu baris = nilai
+lama baris lain yang juga sedang diubah), update dijalankan **2 fase** supaya tidak tabrakan
+constraint: fase 1 lepas semua `id_halte_survei` lama yang salah ke placeholder sementara
+(`TMP-<pk_id>`), fase 2 baru set ke nilai final CSV. Sebelum eksekusi, skrip men-cek bijektif
+(tidak ada 2 baris DB yang match ke `id_halte_survei` CSV yang sama) dan jumlah match harus
+tepat 15 — kalau tidak, dibatalkan otomatis tanpa UPDATE apa pun.
+
+14 baris diperbaiki (`db_id` 8-21, PK Supabase; `HLT-001`/`db_id`=7 sudah benar sejak awal, tidak
+disentuh). 6 baris `DUMMY-HLT-*` tidak disentuh. **Verifikasi ulang setelah UPDATE**: query 15
+baris REAL lagi, cocokkan tiap `id_halte_survei`+`nama`+koordinat ke CSV — **15/15 cocok persis**
+(termasuk penyimpangan ejaan yang memang ada di CSV asli, mis. `HLT-014`="Halte univ trisakti 2"
+huruf kecil — sengaja dipertahankan verbatim sesuai CSV, bukan dirapikan, karena CSV adalah
+sumber kebenaran apa adanya). Contoh sebelum → sesudah:
+- `db_id=8`: `HLT-002`/"Halte Revo Mall" → `HLT-003`/"Halte Revo Mall" (koordinat tidak berubah,
+  106.99061/-6.25558 — nama kebetulan sudah benar sebelumnya, cuma ID-nya yang salah).
+- `db_id=21`: `HLT-015`/"Halte Pekayon" → `HLT-002`/"Halte Pekayon Ahmad Yani" (koordinat tidak
+  berubah, 106.99103/-6.25669).
+
+**Pelajaran untuk re-seed di masa depan**: kalau perlu upload ulang/tambah halte dari CSV
+koordinat, JANGAN gabung dua sumber (Excel nama + CSV koordinat) dengan asumsi urutan baris sama
+persis (`zip()` posisional) — cocokkan dengan kunci eksplisit (`id_halte_survei` yang sudah
+dijamin unik oleh guard di `load_halte_survey_excel()`/`upload_halte_data()`, atau kalau
+terpaksa pakai nama, pastikan exact-match 100% sebelum upload, jangan biarkan mismatch diam-diam
+"digeser" ke posisi lain).
+
+## ⚠️ Update 28 Agustus (malam): keputusan Sam soal status 8 titik traffic counting "REAL"
+
+`project-lead` audit isi `Instrumen_Survei_GeoTransitInsight_Final.xlsx` sheet Form Traffic
+Counting: 8 titik yang selama ini disebut "REAL" (KND-002 s.d. KND-009, dipakai hitung
+`skor_cai`/`skor_equity`) punya catatan asli **"[ESTIMASI 2 JAM - REVISI]... disesuaikan
+arahan PIC — bukan hasil traffic counting aktual"**.
+
+**Klarifikasi Sam (penting, jangan disalahartikan sebagai data dikarang dari nol):** tim
+memang benar-benar mendatangi tiap lokasi, tapi karena semua anggota tim bekerja, tidak ada
+waktu untuk sesi hitung kontinu 2 jam penuh di tiap titik seperti desain awal instrumen.
+Angka `total_aktivitas` adalah **estimasi dari kunjungan/observasi lapangan singkat**, bukan
+hitungan menerus 2 jam, dan disesuaikan mengikuti arahan PIC — **bukan angka yang dikarang
+tanpa kunjungan sama sekali**.
+
+**Keputusan: dipertahankan apa adanya, TIDAK direplace di Field Day 3.** `skor_cai`/
+`skor_equity` yang sudah live tidak diubah. Konsekuensinya: `n_volume` (bobot CAI 0,25,
+terbesar kedua) untuk 8 titik ini punya presisi lebih rendah dari traffic counting kontinu
+sesungguhnya — perlu disebutkan sebagai keterbatasan metodologi di laporan akhir (bukan
+disembunyikan), bukan diklaim sebagai pengukuran presisi.
+
+**15 titik baru (KND-010 s.d. KND-024)**: koordinatnya juga estimasi (bukan GPS asli) —
+**belum diupload**, Sam sedang minta rekan tim perbaiki koordinatnya dulu. Jangan diproses
+ke `skor_cai` sampai itu selesai.
+
+**Bug terpisah ditemukan**: `HLT-001` di sheet Form Kondisi Halte muncul 2x dengan nama/
+lokasi berbeda (Halte Summarecon Bekasi vs Halte Simpang Pekayon) — didelegasikan ke
+`data-ai-analyst` untuk diperbaiki.
+
+## ✅ Koreksi (28 Agustus, malam): baris 3 KONFIRMASI Sam memang contoh, BUKAN data hilang
+
+Entri di bawah ini (ditulis `data-ai-analyst`) sempat menyimpulkan "Halte Summarecon Bekasi"
+(baris 3 Form Kondisi Halte) dan `KND-001` (baris 3 Form Traffic Counting) sebagai data real
+yang hilang/tidak terproses, karena isinya detail (nama, surveyor, koordinat presisi) — bukan
+teks "CONTOH" generik. **Sam konfirmasi langsung: baris-baris itu memang contoh pengisian,
+bukan hasil survei sungguhan** — cuma kebetulan diisi dengan detail yang meyakinkan. Jadi:
+**tidak ada data real yang hilang**, `HLT-001`=Simpang Pekayon di database sudah benar &
+lengkap, `KND-001` memang seharusnya tidak diproses.
+
+Guard duplikat-ID yang ditambahkan tetap dipertahankan (tidak dicabut) — bukan lagi untuk
+"data hilang", tapi sebagai pengaman ke depan: format contoh yang terlalu meyakinkan begini
+berisiko bikin surveyor Field Day 3 tanpa sadar reuse ID yang sama seperti contoh. Tidak ada
+tindak lanjut lain diperlukan untuk baris 3 kedua sheet ini.
+
+## ⚠️ Update 28 Agustus (malam, lanjutan) — SUDAH DIKOREKSI DI ATAS, dibiarkan untuk jejak audit: bug `HLT-001` duplikat — guard ETL ditambahkan, sempat disangka data live HILANG
+
+`data-ai-analyst` menindaklanjuti temuan `project-lead` di atas. **File Excel sumber TIDAK
+diedit** (sesuai batasan — itu jejak audit data lapangan tim survei asli).
+
+**Penyebab akar (root cause) — bukan cuma "ID kebetulan sama"**: baris 3 sheet Form Kondisi
+Halte, yang menurut desain instrumen (lihat sheet "Petunjuk") seharusnya diisi teks "CONTOH"
+placeholder (dilewati saat load), ternyata di file ini **terisi data yang terlihat asli**
+("Halte Summarecon Bekasi", surveyor **Rafael Williem**, tanggal survei 10/08/2026, koordinat
+presisi -6.2185/107.0074). Baris 4 dst diisi surveyor **Samuel Alfa Edison** mulai ID `HLT-001`
+lagi — kemungkinan besar mengikuti teks petunjuk kolom ID ("Kode unik, mis. HLT-001") tanpa
+sadar baris 3 sudah memakai ID yang sama untuk titik yang benar-benar berbeda. Pola identik
+juga terlihat di sheet **Form Traffic Counting**: baris 3 (`KND-001`, "Simpang Jl. Chairil
+Anwar - Jl. Kartini") juga terisi data yang terlihat asli, bukan teks contoh generik — **dicek
+langsung ke tabel `titik_kandidat`, `KND-001` TIDAK PERNAH ada di database** (baris data mulai
+`KND-002`), konsisten dengan loop produksi yang memang selalu mulai baca dari baris 4.
+**Dilaporkan sebagai temuan tambahan untuk Sam — belum diperbaiki, di luar cakupan tugas ini**;
+kemungkinan `KND-001` juga data titik real yang selama ini tak sengaja tidak pernah terproses,
+perlu dikonfirmasi tim survei sebelum diputuskan apakah perlu ditambahkan.
+
+**Cek status live database (sebelum ada perbaikan apa pun)**: `halte_eksisting` **SUDAH berisi**
+15 baris `HLT-001`..`HLT-015` (id 7-21), diupload di sesi sebelumnya lewat jalur ad-hoc yang
+menggabungkan nama baris 4-18 Excel dengan koordinat `koordinat_halte_koridor_biskita.csv`
+(dicocokkan per nama, bukan per ID — bukan lewat `load_halte_survey_excel()` yang ada di kode
+saat ini, yang justru akan skip semua 15 baris itu karena Latitude/Longitude-nya kosong di file
+Excel yang sekarang). Yang tersimpan sebagai `HLT-001` di database adalah **"Halte Simpang
+Pekayon"** (baris 4). **"Halte Summarecon Bekasi" (baris 3, surveyor Rafael Williem) TIDAK ADA
+SAMA SEKALI di `halte_eksisting`** — datanya hilang sejak awal, bukan baru akan hilang. Ini
+persis skenario yang dikhawatirkan tugas ini: satu dari dua baris ber-ID sama "kalah" secara
+diam-diam.
+
+**Guard ditambahkan** (`etl/upload_to_supabase.py`):
+1. `load_halte_survey_excel()` — pemindaian ID Halte SEKARANG dilakukan di awal fungsi,
+   mencakup baris 3 (bukan cuma mulai baris 4 seperti loop produksi) supaya kasus persis
+   seperti ini (duplikat antara baris "CONTOH" yang terisi asli & baris data sungguhan)
+   tetap terdeteksi. Kalau ada ID yang muncul >1 kali, fungsi **raise `ValueError` dan
+   berhenti total — 0 baris diproses/dikembalikan**, dengan pesan mencantumkan nomor baris,
+   nama, kecamatan/kelurahan tiap baris yang bentrok, dan langkah tindak lanjut (minta ID unik
+   dari tim survei, bukan sistem yang menebak). Diverifikasi jalan: menjalankan fungsi ini pada
+   file saat ini langsung `raise ValueError` mengutip baris 3 vs baris 4 `HLT-001` — 0 records,
+   tidak ada yang lolos ke upload.
+2. `upload_halte_data()` — guard kedua (defense-in-depth) mengecek ulang `id_halte_survei`
+   duplikat pada `records` tepat sebelum upsert, untuk kasus `records` dibangun dari jalur lain
+   di masa depan (mis. digabung manual dengan CSV koordinat) yang tidak lewat guard #1. Diuji
+   dengan records tiruan ber-ID sama → `ValueError`, upload dibatalkan.
+
+**TIDAK ADA upload baru dijalankan** — tidak ada perubahan pada tabel `halte_eksisting`
+(masih 21 baris seperti sebelumnya: 6 dummy + 15 real HLT-001..015 yang sudah live, dengan
+Summarecon Bekasi tetap absen). Menunggu keputusan Sam/tim survei sebelum data ini disentuh.
+
+**Yang masih perlu tim survei/Sam putuskan (BUKAN keputusan teknis, diteruskan lewat user)**:
+1. Beri ID unik untuk baris 3 ("Halte Summarecon Bekasi") — mis. `HLT-016` (ID baru, bukan
+   `HLT-001` yang sudah dipakai baris 4) — di file Excel sumber, dilakukan tim survei sendiri
+   (ETL ini sengaja tidak menyentuh file Excel).
+2. Putuskan apakah "Halte Summarecon Bekasi" perlu diupload sebagai halte ke-16 (perlu update
+   `koordinat_halte_koridor_biskita.csv`/proses upload juga menambahkan baris ini — saat ini
+   CSV cuma punya 15 baris, tidak termasuk Summarecon Bekasi).
+3. Konfirmasi status baris 3 di sheet Form Traffic Counting (`KND-001`) — real atau memang
+   contoh yang tidak perlu diproses — supaya konsisten dengan keputusan soal `HLT-001` di atas.
+4. Setelah ID unik diberikan, `HLT-001` (Simpang Pekayon) yang **sudah live di database TIDAK
+   perlu diupload ulang** (upsert `on_conflict='id_halte_survei'` akan tetap match by ID yang
+   sama, aman) — hanya baris baru (Summarecon Bekasi) yang perlu ditambahkan.
+
 ## ✅ Update 28 Agustus: `n_kepadatan` CAI (8 titik real) diganti dari placeholder konstan ke kepadatan REAL per titik; Equity 56 kelurahan direcompute
 
 `data-ai-analyst` memperbaiki temuan `qa-tester` (27 Agu): kolom `n_kepadatan` di
