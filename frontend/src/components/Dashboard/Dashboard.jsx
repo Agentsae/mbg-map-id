@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { BarChart3, MapPinOff, Users } from 'lucide-react'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
 import { supabase, isConfigured } from '../../lib/supabaseClient'
+import { fetchAllRows } from '../../lib/fetchAllRows'
 
 // Data contoh — 12 kecamatan Kota Bekasi. Ganti dengan hasil query
 // coverage ratio sesungguhnya begitu skor_cai/grid_analisis terisi.
@@ -14,13 +15,16 @@ const DEMO_DATA = [
   { kecamatan: 'Mustika Jaya', coverage: 22 },
 ]
 
-// Grid dengan skor_aksesibilitas_transit di bawah ambang ini dianggap
-// "transit desert" untuk keperluan tampilan kartu ringkasan.
-// TODO(data-ai-analyst): konfirmasi ambang resmi (bisa jadi ambang berbeda
-// per rentang skor_tdi, bukan skor_aksesibilitas_transit tunggal) —
-// nilai 0.3 di bawah ini hanya placeholder tampilan, BUKAN definisi final
-// Transit Desert Index.
-const TRANSIT_DESERT_THRESHOLD = 0.3
+// Grid dengan skor_tdi DI ATAS ambang ini dianggap "transit desert" untuk
+// keperluan tampilan kartu ringkasan (skor_tdi lebih tinggi = grid makin
+// "transit desert" — normalisasi min-max, lihat etl/compute_scores.py
+// compute_tdi(); arahnya BERBEDA dari skor_aksesibilitas_transit yang
+// dipakai proksi sebelumnya, saat itu skor_tdi masih selalu null).
+// TODO(data-ai-analyst): konfirmasi ambang resmi "transit desert" untuk
+// dashboard (mis. top quartile / nilai absolut tertentu) — 0.6 di bawah ini
+// hanya placeholder tampilan yang wajar, BUKAN definisi final Transit
+// Desert Index.
+const TRANSIT_DESERT_THRESHOLD = 0.6
 
 // Kartu ringkasan contoh — dipakai kalau Supabase belum tersambung/tabel
 // grid_analisis masih kosong.
@@ -41,10 +45,14 @@ export default function Dashboard() {
     if (!isConfigured) return
 
     // TODO: sesuaikan nama tabel/kolom dengan hasil akhir skema kalian.
-    // Contoh query coverage ratio per kecamatan dari grid_analisis:
+    // Contoh query coverage ratio per kecamatan dari grid_analisis. Cukup
+    // .limit(1) — di sini cuma dipakai untuk cek "tabel sudah ada isinya
+    // atau belum", BUKAN memuat semua baris (yang dibutuhkan untuk agregasi
+    // per kecamatan belum diimplementasikan, lihat TODO di bawah).
     supabase
       .from('grid_analisis')
       .select('skor_tdi')
+      .limit(1)
       .then(({ data: rows, error }) => {
         if (error || !rows?.length) {
           setUsingDemo(true)
@@ -58,38 +66,46 @@ export default function Dashboard() {
         setUsingDemo(true)
       })
 
-    // Jumlah transit desert teridentifikasi: hitung grid dengan skor
-    // aksesibilitas transit di bawah ambang. Ini murni filter/count atas
-    // skor_aksesibilitas_transit yang SUDAH dihitung data-ai-analyst — tidak
-    // ada formula CAI/TDI yang dihitung ulang di sini.
-    supabase
-      .from('grid_analisis')
-      .select('id, kepadatan_penduduk, skor_aksesibilitas_transit')
-      .lt('skor_aksesibilitas_transit', TRANSIT_DESERT_THRESHOLD)
-      .then(({ data: rows, error }) => {
-        if (error || !rows) {
-          setUsingDemoDesert(true)
-          return
-        }
-        setTransitDesertCount(rows.length)
-        setUsingDemoDesert(false)
+    // Jumlah transit desert teridentifikasi: hitung grid dengan skor_tdi di
+    // atas ambang. Ini murni filter/count atas skor_tdi yang SUDAH dihitung
+    // data-ai-analyst (Transit Desert Index) — tidak ada formula CAI/TDI
+    // yang dihitung ulang di sini.
+    //
+    // fetchAllRows (bukan `.select(...).then(...)` polos) — dengan ambang
+    // 0.6, 1.517 dari 2.607 grid cocok filter ini (diverifikasi langsung ke
+    // API), jauh di atas cap 1000 baris/request PostgREST. Tanpa paginasi,
+    // transitDesertCount & potensiPenerimaManfaat akan diam-diam undercount
+    // (hanya menghitung 1000 dari 1517 grid) — lihat lib/fetchAllRows.js.
+    fetchAllRows(() =>
+      supabase
+        .from('grid_analisis')
+        .select('id, kepadatan_penduduk, skor_tdi')
+        .gt('skor_tdi', TRANSIT_DESERT_THRESHOLD)
+        .order('id', { ascending: true })
+    ).then(({ data: rows, error }) => {
+      if (error || !rows) {
+        setUsingDemoDesert(true)
+        return
+      }
+      setTransitDesertCount(rows.length)
+      setUsingDemoDesert(false)
 
-        // Potensi penerima manfaat: agregasi kepadatan_penduduk pada grid
-        // yang teridentifikasi sebagai transit desert, sebagai proksi kasar
-        // jumlah penduduk yang berpotensi diuntungkan bila desert ini
-        // ditangani. Ini penjumlahan kolom mentah, bukan formula baru.
-        // TODO(data-ai-analyst): ganti dengan agregasi jumlah_penduduk
-        // (headcount) yang lebih akurat lewat join spasial ke tabel
-        // `penduduk`, idealnya lewat RPC khusus — kepadatan_penduduk di
-        // grid_analisis adalah rasio per luas grid, bukan headcount langsung.
-        if (rows.length) {
-          const totalKepadatan = rows.reduce((sum, r) => sum + (r.kepadatan_penduduk ?? 0), 0)
-          setPotensiPenerimaManfaat(Math.round(totalKepadatan))
-          setUsingDemoPenerima(false)
-        } else {
-          setUsingDemoPenerima(true)
-        }
-      })
+      // Potensi penerima manfaat: agregasi kepadatan_penduduk pada grid
+      // yang teridentifikasi sebagai transit desert, sebagai proksi kasar
+      // jumlah penduduk yang berpotensi diuntungkan bila desert ini
+      // ditangani. Ini penjumlahan kolom mentah, bukan formula baru.
+      // TODO(data-ai-analyst): ganti dengan agregasi jumlah_penduduk
+      // (headcount) yang lebih akurat lewat join spasial ke tabel
+      // `penduduk`, idealnya lewat RPC khusus — kepadatan_penduduk di
+      // grid_analisis adalah rasio per luas grid, bukan headcount langsung.
+      if (rows.length) {
+        const totalKepadatan = rows.reduce((sum, r) => sum + (r.kepadatan_penduduk ?? 0), 0)
+        setPotensiPenerimaManfaat(Math.round(totalKepadatan))
+        setUsingDemoPenerima(false)
+      } else {
+        setUsingDemoPenerima(true)
+      }
+    })
   }, [])
 
   return (

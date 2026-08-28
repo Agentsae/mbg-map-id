@@ -76,9 +76,19 @@ Deno.serve(async (req) => {
         ? "batas_administrasi!inner(nama_kelurahan, nama_kecamatan)"
         : "batas_administrasi(nama_kelurahan, nama_kecamatan)");
 
+    // FIX (27 Agu 2026, data-ai-analyst): `sumber` WAJIB difilter sebelum
+    // order('ranking').limit(N) — lihat 010_skor_equity_sumber.sql. Tabel
+    // skor_equity sekarang berisi 5 baris DUMMY (ranking 1-5, testing) DAN
+    // 56 baris REAL (ranking 1-56, agregasi 56 kelurahan RBI asli) SEKALIGUS
+    // — keduanya punya ranking mulai dari 1, jadi tanpa filter ini query
+    // top-5 bisa mengembalikan campuran ranking=1 dummy & ranking=1 real
+    // secara tidak terduga. Prioritaskan REAL (data sungguhan Kota Bekasi);
+    // ilike dipakai (bukan eq) karena nilai `sumber` REAL menyertakan detail
+    // dinamis (mis. "REAL - agregasi lokal (... n=4)"), bukan string tetap.
     let queryBuilder = supabase
       .from("skor_equity")
       .select(selectColumns)
+      .ilike("sumber", "REAL%")
       .order("ranking", { ascending: true })
       .limit(5);
 
@@ -105,10 +115,36 @@ Deno.serve(async (req) => {
       const fallback = await supabase
         .from("skor_equity")
         .select("skor_final, ranking, kelompok_terdampak, rekomendasi_intervensi, batas_administrasi(nama_kelurahan, nama_kecamatan)")
+        // Sama seperti query utama di atas: WAJIB filter sumber REAL supaya
+        // tidak campur dengan 5 baris DUMMY (ranking 1-5) — lihat catatan FIX
+        // di query utama.
+        .ilike("sumber", "REAL%")
         .order("ranking", { ascending: true })
         .limit(5);
       if (fallback.error) throw fallback.error;
       skorRows = fallback.data;
+    }
+
+    // Fallback TERAKHIR: kalau tidak ada satu pun baris REAL sama sekali
+    // (mis. environment testing/lokal sebelum data 56 kelurahan RBI
+    // diupload — lihat etl/aggregate_equity_kelurahan.py), pakai baris
+    // DUMMY apa adanya supaya dashboard tidak kosong total saat development,
+    // TAPI catat eksplisit di response (areaFilterNote) supaya tidak
+    // disalahartikan sebagai data Kota Bekasi sungguhan.
+    if (!skorRows || skorRows.length === 0) {
+      const dummyFallback = await supabase
+        .from("skor_equity")
+        .select("skor_final, ranking, kelompok_terdampak, rekomendasi_intervensi, batas_administrasi(nama_kelurahan, nama_kecamatan)")
+        .order("ranking", { ascending: true })
+        .limit(5);
+      if (dummyFallback.error) throw dummyFallback.error;
+      if (dummyFallback.data && dummyFallback.data.length > 0) {
+        skorRows = dummyFallback.data;
+        areaFilterNote =
+          (areaFilterNote ? areaFilterNote + " " : "") +
+          "PERINGATAN: belum ada data skor_equity REAL (56 kelurahan) di database ini — " +
+          "menampilkan data sintetis/testing, BUKAN hasil analisis Kota Bekasi sungguhan.";
+      }
     }
 
     if (!skorRows || skorRows.length === 0) {
@@ -160,6 +196,12 @@ hanya boleh MENJELASKAN skor yang sudah dihitung, bukan menentukan/menebak skor 
 Kalau menyebut skor, tulis maksimal 2 angka desimal dan gunakan tanda koma (,) sebagai
 pemisah desimal sesuai konvensi Bahasa Indonesia (contoh: 0,46), JANGAN diubah ke bentuk
 persentase.
+Kalau field "kelompok_terdampak" atau "rekomendasi_intervensi" bernilai null untuk suatu
+kelurahan (belum ada analisis kerentanan sosial detail/rekomendasi kebijakan spesifik dari
+tim untuk kelurahan itu — kelurahan itu baru masuk ranking lewat skor kuantitatif), JANGAN
+mengarang kelompok terdampak atau rekomendasi spesifik untuk kelurahan itu. Sebutkan saja
+skornya, lalu nyatakan eksplisit bahwa analisis kerentanan/rekomendasi detail untuk
+kelurahan itu belum tersedia dan perlu tindak lanjut tim.
 Jawab dalam Bahasa Indonesia, maksimal 4 kalimat.`;
 
     // Claude Messages API — lihat https://docs.claude.com/en/api/messages

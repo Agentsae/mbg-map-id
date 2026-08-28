@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { SlidersHorizontal } from 'lucide-react'
 import MapView from '../Map/MapView'
 import { supabase, isConfigured } from '../../lib/supabaseClient'
+import { fetchAllRows } from '../../lib/fetchAllRows'
 import { KECAMATAN_KOTA_BEKASI } from '../../lib/kecamatan'
 import {
   extractLatLon,
@@ -15,15 +16,40 @@ import {
  * AnalisisSpasial — "Peta Multi-Layer Gap Analysis" (PRD Bab 8).
  * Layer yang ditampilkan:
  *  - Kepadatan penduduk (choropleth grid_analisis.kepadatan_penduduk)
- *  - Indeks gap aksesibilitas (choropleth grid_analisis.skor_tdi — TDI dihitung
- *    data-ai-analyst, frontend HANYA menampilkan apa adanya)
+ *  - Indeks gap aksesibilitas (choropleth grid_analisis.skor_tdi — Transit
+ *    Desert Index dihitung data-ai-analyst per grid 2.607 sel kota, live
+ *    sejak 27 Agustus 2026; frontend HANYA menampilkan apa adanya, skor lebih
+ *    tinggi = grid makin "transit desert")
  *  - Jaringan transit eksisting (titik halte_eksisting)
+ *  - Batas kecamatan (outline) — dari batas_administrasi data ASLI (lihat di bawah)
  * Filter per kecamatan wajib render ulang < 2 detik (acceptance criteria).
- * Karena grid_analisis tidak (belum) punya kolom kecamatan langsung, filter
- * di sini pakai pendekatan bounding-box per kecamatan dari batas_administrasi
- * (lihat komentar bboxFromRing di lib/geo.js) — bukan point-in-polygon presisi.
- * Ini murni navigasi/filter UI, BUKAN penghitungan ulang CAI/TDI/Equity Index.
+ * Karena grid_analisis tidak (belum) punya kolom kecamatan langsung, atribusi
+ * "grid ini masuk kecamatan mana" di sini pakai pendekatan bounding-box per
+ * kecamatan dari batas_administrasi (lihat komentar bboxFromRing di lib/geo.js)
+ * — bukan point-in-polygon presisi. Ini murni navigasi/filter UI, BUKAN
+ * penghitungan ulang CAI/TDI/Equity Index.
+ *
+ * Sumber data batas_administrasi: tabel ini berisi 56 baris poligon ASLI
+ * (BIG RBI 25K, kolom sumber = SUMBER_BATAS_RESMI di bawah) BERDAMPINGAN
+ * dengan 6 baris dummy lama (`'DATA SINTETIS - seed testing, ...'`, dipakai
+ * komponen lain seperti EquityIndexView/skor_equity yang FK-nya belum
+ * dimigrasikan data-ai-analyst — di luar wewenang webgis-developer). Query di
+ * bawah WAJIB filter `.eq('sumber', SUMBER_BATAS_RESMI)` supaya:
+ *  (a) tidak menampilkan poligon dummy sebagai batas kecamatan di peta, dan
+ *  (b) bbox per kecamatan tidak "tercemar" merge dengan bbox dummy — dicek
+ *      manual, 2 dari 6 nama dummy (`nama_kecamatan` = 'Bekasi Utara' dan
+ *      'Bekasi Timur') collide persis dengan nama kecamatan resmi, jadi tanpa
+ *      filter ini bbox 2 kecamatan itu akan salah/kasar.
+ * Ejaan nama_kecamatan resmi RBI TIDAK selalu sama dengan daftar statis
+ * KECAMATAN_KOTA_BEKASI di lib/kecamatan.js (mis. resmi "Mustikajaya" tanpa
+ * spasi, bukan "Mustika Jaya") — dropdown filter kecamatan di komponen ini
+ * karena itu dibangun dari nama_kecamatan hasil fetch asli (kecamatanOptions),
+ * BUKAN dari KECAMATAN_KOTA_BEKASI, supaya value dropdown selalu cocok persis
+ * dengan properti `kecamatan` yang dilekatkan ke grid/halte di bawah.
+ * KECAMATAN_KOTA_BEKASI tetap dipakai sebagai fallback nama saat mode demo
+ * (Supabase belum tersambung / tabel masih kosong).
  */
+const SUMBER_BATAS_RESMI = 'BIG RBI 25K KUGI50 2022-12-31 (tanahair.indonesia.go.id)'
 
 // TODO(ui-ux-designer): skema warna choropleth di bawah masih asumsi wajar
 // (bukan hasil keputusan visual resmi) — sesuaikan kalau ada arahan palet.
@@ -131,6 +157,13 @@ export default function AnalisisSpasial() {
   const [transitVisible, setTransitVisible] = useState(true)
 
   const [usingDemoBoundary, setUsingDemoBoundary] = useState(!isConfigured)
+  const [kecamatanOptions, setKecamatanOptions] = useState(KECAMATAN_KOTA_BEKASI)
+  // Ring poligon batas kecamatan ASLI (bukan bbox) — dipakai untuk layer
+  // outline visual di peta, terpisah dari bboxes (yang dipakai untuk atribusi
+  // grid/halte -> kecamatan). null selama data asli belum termuat (mode demo
+  // tidak menampilkan outline sama sekali — bbox dummy terlalu kasar untuk
+  // digambar sebagai "batas kecamatan").
+  const [boundaryRings, setBoundaryRings] = useState(null)
   const [gridFeatures, setGridFeatures] = useState(() => buildDemoGrid(buildDemoKecamatanBBoxes()))
   const [usingDemoGrid, setUsingDemoGrid] = useState(!isConfigured)
   const [halteFeatures, setHalteFeatures] = useState(() => buildDemoHalte(buildDemoKecamatanBBoxes()))
@@ -150,15 +183,21 @@ export default function AnalisisSpasial() {
     async function load() {
       let bboxes = buildDemoKecamatanBBoxes()
       let usedDemoBoundary = true
+      let rings = null
       try {
+        // Filter sumber = data ASLI (56 poligon BIG RBI 25K) — JANGAN ikutkan
+        // 6 baris dummy (lihat catatan SUMBER_BATAS_RESMI di atas komponen ini).
         const { data, error } = await supabase
           .from('batas_administrasi')
-          .select('nama_kecamatan, geom')
+          .select('nama_kecamatan, nama_kelurahan, geom')
+          .eq('sumber', SUMBER_BATAS_RESMI)
           .limit(1000)
         if (!error && data?.length) {
           const merged = {}
+          const outlineFeatures = []
           data.forEach((row) => {
-            const ring0 = extractPolygonRings(row.geom)?.[0]
+            const polyRings = extractPolygonRings(row.geom)
+            const ring0 = polyRings?.[0]
             const bbox = ring0 ? bboxFromRing(ring0) : null
             if (!bbox || !row.nama_kecamatan) return
             const key = row.nama_kecamatan
@@ -170,10 +209,19 @@ export default function AnalisisSpasial() {
               merged[key].minLon = Math.min(merged[key].minLon, bbox.minLon)
               merged[key].maxLon = Math.max(merged[key].maxLon, bbox.maxLon)
             }
+            polyRings.forEach((ring) => {
+              outlineFeatures.push({
+                type: 'Feature',
+                geometry: { type: 'Polygon', coordinates: [ring] },
+                properties: { nama_kecamatan: row.nama_kecamatan, nama_kelurahan: row.nama_kelurahan },
+              })
+            })
           })
           if (Object.keys(merged).length) {
             bboxes = merged
             usedDemoBoundary = false
+            rings = { type: 'FeatureCollection', features: outlineFeatures }
+            setKecamatanOptions(Object.keys(merged).sort((a, b) => a.localeCompare(b)))
           }
         }
       } catch {
@@ -181,12 +229,19 @@ export default function AnalisisSpasial() {
       }
       if (cancelled) return
       setUsingDemoBoundary(usedDemoBoundary)
+      setBoundaryRings(rings)
 
       try {
-        const { data, error } = await supabase
-          .from('grid_analisis')
-          .select('id, geom, kepadatan_penduduk, skor_aksesibilitas_transit, skor_tdi')
-          .limit(4000)
+        // fetchAllRows (bukan .limit(4000) saja) — 2.607 baris grid_analisis
+        // melebihi cap 1000 baris/request PostgREST, lihat lib/fetchAllRows.js.
+        // Fetch sekali di awal, filter kecamatan sesudahnya murni array-filter
+        // di memori (lihat filteredGrid useMemo di bawah).
+        const { data, error } = await fetchAllRows(() =>
+          supabase
+            .from('grid_analisis')
+            .select('id, geom, kepadatan_penduduk, skor_aksesibilitas_transit, skor_tdi')
+            .order('id', { ascending: true })
+        )
         const cells = !error
           ? (data ?? [])
               .map((row) => {
@@ -296,6 +351,18 @@ export default function AnalisisSpasial() {
     () => toPolygonFeatureCollection(filteredGrid, (g) => g.skor_tdi),
     [filteredGrid]
   )
+  // Outline batas kecamatan (poligon ASLI, bukan bbox) — kalau ada filter
+  // aktif, cuma tampilkan poligon kecamatan terpilih supaya jelas secara
+  // visual area mana yang sedang difilter di layer lain.
+  const boundaryGeoJSON = useMemo(() => {
+    if (!boundaryRings) return { type: 'FeatureCollection', features: [] }
+    if (!kecamatanFilter) return boundaryRings
+    return {
+      type: 'FeatureCollection',
+      features: boundaryRings.features.filter((f) => f.properties.nama_kecamatan === kecamatanFilter),
+    }
+  }, [boundaryRings, kecamatanFilter])
+
   const transitGeoJSON = useMemo(
     () => ({
       type: 'FeatureCollection',
@@ -332,6 +399,21 @@ export default function AnalisisSpasial() {
         },
       },
     ]
+    // Outline batas kecamatan asli — hanya ditampilkan kalau data asli sudah
+    // termuat (boundaryRings != null); mode demo tidak menggambar batas bbox
+    // kasar sebagai garis kecamatan supaya tidak menyesatkan secara visual.
+    if (boundaryRings) {
+      arr.push({
+        id: 'analisis-batas-kecamatan',
+        type: 'line',
+        data: boundaryGeoJSON,
+        paint: {
+          'line-color': '#334155',
+          'line-width': kecamatanFilter ? 2.5 : 1,
+          'line-opacity': kecamatanFilter ? 0.9 : 0.5,
+        },
+      })
+    }
     if (transitVisible) {
       arr.push({
         id: 'analisis-transit',
@@ -346,7 +428,18 @@ export default function AnalisisSpasial() {
       })
     }
     return arr
-  }, [choroplethLayer, kepadatanGeoJSON, gapGeoJSON, activeRange, activeColors, transitVisible, transitGeoJSON])
+  }, [
+    choroplethLayer,
+    kepadatanGeoJSON,
+    gapGeoJSON,
+    activeRange,
+    activeColors,
+    boundaryRings,
+    boundaryGeoJSON,
+    kecamatanFilter,
+    transitVisible,
+    transitGeoJSON,
+  ])
 
   const usingDemoAny = usingDemoGrid || usingDemoHalte
 
@@ -378,7 +471,7 @@ export default function AnalisisSpasial() {
             className="w-full text-sm border border-slate-300 rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-brand-blue"
           >
             <option value="">Semua Kecamatan</option>
-            {KECAMATAN_KOTA_BEKASI.map((k) => (
+            {kecamatanOptions.map((k) => (
               <option key={k} value={k}>{k}</option>
             ))}
           </select>
@@ -446,9 +539,17 @@ export default function AnalisisSpasial() {
             <span>Halte / titik transit eksisting</span>
           </div>
         )}
+        {boundaryRings && (
+          <div className="flex items-center gap-2">
+            <span className="inline-block w-8 h-0.5 bg-slate-600 shrink-0" />
+            <span>Batas kecamatan (BIG RBI 25K, poligon asli)</span>
+          </div>
+        )}
         <p className="text-[10px] text-slate-400 pt-1">
           {filteredGrid.length} grid · {filteredHalte.length} titik transit ditampilkan
-          {usingDemoBoundary ? ' · batas kecamatan: pendekatan bounding box contoh' : ''}
+          {usingDemoBoundary
+            ? ' · batas kecamatan: belum termuat, memakai pendekatan bounding box contoh'
+            : ' · atribusi grid/halte ke kecamatan memakai pendekatan bounding box dari poligon asli (bukan point-in-polygon presisi)'}
         </p>
       </div>
     </div>

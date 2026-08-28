@@ -15,6 +15,10 @@ TODO integrasi selanjutnya (belum dikerjakan di sini, butuh data asli):
   - Ganti load_demo_data()/load_demo_grid_data()/load_demo_equity_data() dengan
     query GeoPandas/PostGIS asli:
       * n_kepadatan   <- spatial join grid_analisis/batas_administrasi dengan penduduk
+        [SELESAI untuk CAI titik_kandidat, 28 Agu 2026 — lihat
+        etl/attach_kepadatan_titik_kandidat.py: spatial join titik_kandidat ->
+        grid_analisis (dasymetric real), gantikan KEPADATAN_NEUTRAL_PLACEHOLDER
+        di upload_to_supabase.recompute_all_cai_scores()]
       * n_jarak_inv   <- ST_Distance / GeoPandas .distance() ke poi terdekat
       * n_volume      <- jumlah penumpang KRL/BRT dalam radius tertentu
       * n_survei      <- skor_survei_gabungan dari tabel halte_eksisting
@@ -177,6 +181,54 @@ def _sensitivity_check_generic(
                 "kriteria_digeser": key,
                 "arah": "+" if sign > 0 else "-",
                 "jumlah_ranking_berubah": int(rank_changed),
+            })
+    return pd.DataFrame(results)
+
+
+def top_n_stability_check(
+    df: pd.DataFrame,
+    base_weights: dict,
+    id_col: str,
+    compute_fn,
+    score_col: str,
+    top_n: int = 20,
+    delta: float = 0.1,
+) -> pd.DataFrame:
+    """
+    Pelengkap _sensitivity_check_generic() untuk dataset besar (mis. 2.607
+    grid TDI) di mana "jumlah ranking berubah" per ENTITAS jadi metrik yang
+    bising/kurang informatif secara kebijakan: dengan ribuan baris bernilai
+    kontinu, pergeseran bobot kecil wajar menukar urutan pasangan yang
+    skornya nyaris identik (mis. peringkat #1000 vs #1001) tanpa itu berarti
+    prioritas kebijakan berubah. Yang lebih relevan untuk pengambil keputusan
+    (Dishub/Bappeda memprioritaskan TOP-N lokasi, bukan urutan lengkap
+    seluruh grid) adalah: dari top_n entitas prioritas tertinggi versi bobot
+    dasar, berapa yang TETAP masuk top_n setelah bobot digeser ±delta.
+
+    Return: DataFrame dengan kolom 'kriteria_digeser', 'arah',
+    'jumlah_tetap_top_n' (dari top_n, semakin dekat ke top_n = semakin
+    stabil), 'top_n'.
+    """
+    baseline_top = set(
+        compute_fn(df, base_weights).set_index(id_col)[score_col].nlargest(top_n).index
+    )
+    results = []
+    for key in base_weights:
+        for sign in (+1, -1):
+            shifted = base_weights.copy()
+            shifted[key] = max(0, shifted[key] + sign * delta)
+            total = sum(shifted.values())
+            shifted = {k: v / total for k, v in shifted.items()}
+
+            new_top = set(
+                compute_fn(df, shifted).set_index(id_col)[score_col].nlargest(top_n).index
+            )
+            tetap = len(baseline_top & new_top)
+            results.append({
+                "kriteria_digeser": key,
+                "arah": "+" if sign > 0 else "-",
+                "jumlah_tetap_top_n": tetap,
+                "top_n": top_n,
             })
     return pd.DataFrame(results)
 

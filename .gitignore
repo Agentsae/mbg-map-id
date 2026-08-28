@@ -47,6 +47,11 @@ Desktop.ini
 data/raw/
 *.zip
 *.7z
+# Cache mentah tile Overpass (etl/fetch_osm_building_footprints.py) — JSON per-tile,
+# total bisa ratusan MB untuk seluruh Kota Bekasi, murni cache lokal supaya re-run
+# tidak query ulang tile yang sudah berhasil. Hasil akhirnya (building_footprint_bekasi.geojson)
+# sudah di-ignore lewat *.geojson di bawah.
+etl/data/osm/_building_tiles_raw/
 
 # ===== Geo / Large binaries =====
 *.shp

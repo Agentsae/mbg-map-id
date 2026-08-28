@@ -61,6 +61,20 @@ PREFIX_ID_TITIK_SURVEI_DEMO = "KND-DEMO-"
 # Proxy/placeholder untuk recompute_all_cai_scores() — KONSISTEN dengan yang
 # sebelumnya dipakai upload_cai_titik_kandidat_batch2.py (lihat penjelasan
 # panjang soal alasan tiap nilai di file itu, sekarang di-deprecate).
+#
+# STATUS 28 Agu 2026 (temuan qa-tester 27 Agu, DIPERBAIKI): KEPADATAN_NEUTRAL_PLACEHOLDER
+# dulu dipakai untuk SEMUA 8 titik real (n_kepadatan identik 0.5000 di semua
+# baris -> kriteria berbobot terbesar, 0.35, efektif tidak diskriminatif sama
+# sekali). Sekarang recompute_all_cai_scores() menerima parameter opsional
+# `kepadatan_by_titik_id` (dict {titik_kandidat_id: kepadatan_penduduk_real})
+# — kalau diisi, dipakai menggantikan placeholder ini per baris. Nilai real
+# didapat lewat spatial join titik_kandidat ke grid_analisis (lihat
+# etl/attach_kepadatan_titik_kandidat.py untuk metodologi lengkap). Placeholder
+# ini TETAP dipertahankan sebagai fallback kalau parameter itu tidak diisi
+# (perilaku lama, mis. dipanggil tanpa argumen) ATAU untuk titik_kandidat_id
+# yang KEBETULAN tidak ada di dict yang dioper (data grid belum menutupi
+# lokasi itu) — supaya baris itu tidak error, tapi dicetak sebagai peringatan
+# eksplisit (bukan diam-diam).
 KEPADATAN_NEUTRAL_PLACEHOLDER = 11650  # PLACEHOLDER: rata-rata kepadatan_penduduk 4 titik demo load_demo_data(), BUKAN data BPS per titik asli
 SKOR_SURVEI_TITIK_BARU = 0.0  # PLACEHOLDER: titik kandidat baru, belum ada infrastruktur eksisting untuk disurvei Form Kondisi Halte
 
@@ -185,13 +199,34 @@ def update_cai_scores_by_titik_kandidat_id(client, scored_df, titik_kandidat_id_
     return updated
 
 
-def recompute_all_cai_scores(client, weights: dict = None) -> pd.DataFrame:
+def recompute_all_cai_scores(
+    client,
+    weights: dict = None,
+    kepadatan_by_titik_id: dict = None,
+    upload: bool = True,
+) -> pd.DataFrame:
     """
     FUNGSI STANDAR untuk skor_cai — panggil fungsi ini SETIAP KALI ada
     perubahan data titik_kandidat (upload baru dari MAPID Apps ATAU revisi
     data survei), BUKAN menulis script batch baru tiap kali seperti
     upload_cai_titik_kandidat_batch2.py sebelumnya (sekarang di-deprecate,
     isinya tinggal memanggil fungsi ini — lihat file itu).
+
+    kepadatan_by_titik_id (BARU, 28 Agu 2026): dict opsional
+    {titik_kandidat_id: kepadatan_penduduk_real} — kalau diisi, MENGGANTIKAN
+    KEPADATAN_NEUTRAL_PLACEHOLDER per baris yang id-nya ada di dict tsb.
+    Titik yang id-nya TIDAK ada di dict tetap pakai placeholder (dicetak
+    sebagai peringatan eksplisit) supaya baris itu tidak diam-diam kosong.
+    Default None -> perilaku lama tidak berubah (semua baris pakai placeholder).
+    Lihat etl/attach_kepadatan_titik_kandidat.py untuk cara menyusun dict ini
+    dari spatial join ke grid_analisis (dasymetric real).
+
+    upload (BARU, 28 Agu 2026): kalau False, fungsi ini HANYA menghitung
+    (compute_cai()) dan mengembalikan DataFrame, TIDAK menulis apa pun ke
+    Supabase — dipakai untuk preview/dry-run sebelum commit perubahan.
+    Default True supaya pemanggil lama (mis. upload_cai_titik_kandidat_batch2.py,
+    __main__ file ini) yang tidak mengoper argumen ini tetap berperilaku
+    identik dengan sebelumnya (selalu upload).
 
     MASALAH YANG DIPERBAIKI (lihat permintaan Sam 26 Agu 2026): compute_cai()
     melakukan normalisasi min-max (normalize_min_max() di compute_scores.py)
@@ -275,7 +310,19 @@ def recompute_all_cai_scores(client, weights: dict = None) -> pd.DataFrame:
     # Proxy kolom mentah compute_cai() — lihat penjelasan lengkap di docstring atas.
     df["volume_penumpang"] = df["total_aktivitas"]
     df["jarak_fasilitas_m"] = df["jarak_transit_terdekat_m"]
-    df["kepadatan_penduduk"] = KEPADATAN_NEUTRAL_PLACEHOLDER  # PLACEHOLDER, lihat docstring
+    if kepadatan_by_titik_id is not None:
+        df["kepadatan_penduduk"] = df["titik_kandidat_id"].map(kepadatan_by_titik_id)
+        n_missing = df["kepadatan_penduduk"].isna().sum()
+        if n_missing:
+            missing_ids = df.loc[df["kepadatan_penduduk"].isna(), "titik_kandidat_id"].tolist()
+            print(
+                f"[PERINGATAN] {n_missing} titik_kandidat_id tidak ada di kepadatan_by_titik_id "
+                f"(grid_analisis belum menutupi lokasi itu) -> pakai KEPADATAN_NEUTRAL_PLACEHOLDER "
+                f"untuk baris itu saja: {missing_ids}"
+            )
+        df["kepadatan_penduduk"] = df["kepadatan_penduduk"].fillna(KEPADATAN_NEUTRAL_PLACEHOLDER)
+    else:
+        df["kepadatan_penduduk"] = KEPADATAN_NEUTRAL_PLACEHOLDER  # PLACEHOLDER, lihat docstring
     df["skor_survei"] = SKOR_SURVEI_TITIK_BARU  # PLACEHOLDER, lihat docstring
     df["nama_lokasi"] = df["deskripsi_lokasi"]  # keterbacaan print/debug saja
 
@@ -283,6 +330,13 @@ def recompute_all_cai_scores(client, weights: dict = None) -> pd.DataFrame:
     # inilah yang membuat skala normalisasi konsisten lintas-batch (lihat
     # docstring "MASALAH YANG DIPERBAIKI" di atas), bukan per-sesi-upload.
     scored = compute_cai(df, weights)
+
+    if not upload:
+        print(
+            f"[DRY-RUN] recompute_all_cai_scores: {len(scored)} titik_kandidat REAL dihitung "
+            "(upload=False), TIDAK ada perubahan ditulis ke skor_cai."
+        )
+        return scored
 
     target_ids = scored["titik_kandidat_id"].tolist()
     existing_res = (
@@ -607,6 +661,7 @@ def upload_equity_scores(client, scored_df):
         records.append({
             "kelurahan_id": kelurahan_id,
             "skor_cai_rata2": round(row["skor_cai_rata2"], 4),
+            "n_aksesibilitas_inv": round(row["n_aksesibilitas_inv"], 4),
             "n_kepadatan": round(row["n_kepadatan"], 4),
             "n_usia_rentan": round(row["n_usia_rentan"], 4),
             "n_akses_pendidikan": round(row["n_akses_pendidikan"], 4),
