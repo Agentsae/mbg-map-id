@@ -19,10 +19,18 @@
 -- kolom komponen ternormalisasi yang SUDAH ada di tabel skor_equity
 -- (hasil etl/compute_scores.py compute_equity_index()).
 --
--- Bobot dimensi (konfigurasi_bobot, nama_index='EQUITY', disetujui mentor
--- 2026-08-27; = DEFAULT_EQUITY_WEIGHTS di etl/compute_scores.py):
+-- Bobot dimensi (konfigurasi_bobot, nama_index='EQUITY'; = DEFAULT_EQUITY_WEIGHTS
+-- di etl/compute_scores.py). Bobot ini hasil review worksheet bersama mentor
+-- 2026-08-27 (bukan pairwise Saaty formal dengan consistency ratio) — cukup
+-- untuk produksi, tapi jangan digambarkan sebagai AHP tervalidasi penuh.
 --     aksesibilitas_inv 0.30 | usia_rentan 0.20 | kepadatan 0.15
 --     akses_pendidikan  0.15 | akses_kesehatan 0.10 | akses_kerja 0.10
+--
+-- SNAPSHOT NILAI-n: angka n_* di komentar tiap statement di bawah adalah hasil
+-- recompute etl/aggregate_equity_kelurahan.py per 2026-08-28. Kalau ETL itu
+-- di-rerun dan nilai n_* bergeser, kelompok_terdampak + komentar di file ini
+-- bisa jadi stale dan HARUS ditinjau ulang (guard di akhir file hanya menangkap
+-- baris NULL, bukan pergeseran nilai).
 --
 -- ATURAN PEMETAAN kelompok_terdampak (deterministik):
 --   1. Hitung kontribusi berbobot tiap dimensi kerentanan ke skor_final:
@@ -113,7 +121,7 @@ where se.kelurahan_id = ba.id and ba.nama_kelurahan = 'Kaliabang Tengah' and se.
 -- #4 Jatimurni (Pondokmelati) — terlemah: akses_kesehatan (n=1.00), akses_pendidikan (0.65)
 update skor_equity se set
   kelompok_terdampak = array['warga dengan akses faskes terbatas','pelajar & keluarga tanpa sekolah dalam jangkauan jalan kaki'],
-  rekomendasi_intervensi = 'Sediakan angkutan pengumpan reguler dari Jl. Raya Jatimurni - Jl. Wibawa Mukti II menuju puskesmas/RS rujukan dan halte LRT Jabodebek Jatibening. Faskes terdekat kini > 1,5 km (di luar jangkauan jalan kaki lansia); target headway <= 20 menit pada jam layanan siang.'
+  rekomendasi_intervensi = 'Akses fasilitas kesehatan Jatimurni adalah dimensi paling timpang di seluruh sampel 56 kelurahan. Sediakan angkutan pengumpan reguler dari Jl. Raya Jatimurni - Jl. Wibawa Mukti II menuju puskesmas/RS rujukan dan halte LRT Jabodebek Jatibening, dengan prioritas jam layanan siang untuk kebutuhan warga lanjut usia.'
 from batas_administrasi ba
 where se.kelurahan_id = ba.id and ba.nama_kelurahan = 'Jatimurni' and se.sumber like 'REAL - %';
 
@@ -141,7 +149,7 @@ where se.kelurahan_id = ba.id and ba.nama_kelurahan = 'Pejuang' and se.sumber li
 -- #8 Jatimekar (Jatiasih) — terlemah: akses_pendidikan (n=0.88)
 update skor_equity se set
   kelompok_terdampak = array['pelajar & keluarga tanpa sekolah dalam jangkauan jalan kaki'],
-  rekomendasi_intervensi = 'Operasikan feeder rute pendidikan dari Jatimekar (Jl. Raya Jatimekar, kawasan Kemang IFI) ke klaster SMA/SMK Jatiasih dan ke halte LRT Jabodebek Cikunir. Jarak sekolah terdekat > 1 km membuat pelajar bergantung kendaraan pribadi atau ojek.'
+  rekomendasi_intervensi = 'Akses ke fasilitas pendidikan adalah dimensi paling tertinggal di Jatimekar, sehingga pelajar bergantung pada kendaraan pribadi atau ojek. Operasikan feeder rute pendidikan dari Jl. Raya Jatimekar (kawasan Kemang IFI) ke klaster SMA/SMK Jatiasih dan ke halte LRT Jabodebek Cikunir.'
 from batas_administrasi ba
 where se.kelurahan_id = ba.id and ba.nama_kelurahan = 'Jatimekar' and se.sumber like 'REAL - %';
 
@@ -215,7 +223,7 @@ where se.kelurahan_id = ba.id and ba.nama_kelurahan = 'Cimuning' and se.sumber l
 -- #18 Bantargebang (Bantargebang) — akses_pendidikan (n=1.00)
 update skor_equity se set
   kelompok_terdampak = array['pelajar & keluarga tanpa sekolah dalam jangkauan jalan kaki'],
-  rekomendasi_intervensi = 'Feeder rute sekolah dari kelurahan Bantargebang (Jl. Raya Narogong) ke klaster SMP/SMA terdekat lalu Stasiun Bekasi. Akses pendidikan paling tertinggal di seluruh sampel (nilai ternormalisasi 1,00).'
+  rekomendasi_intervensi = 'Akses pendidikan di kelurahan Bantargebang adalah yang paling tertinggal di antara seluruh 56 kelurahan yang dinilai. Operasikan feeder rute sekolah dari Jl. Raya Narogong ke klaster SMP/SMA terdekat lalu Stasiun Bekasi.'
 from batas_administrasi ba
 where se.kelurahan_id = ba.id and ba.nama_kelurahan = 'Bantargebang' and se.sumber like 'REAL - %';
 
@@ -352,10 +360,14 @@ update skor_equity se set
 from batas_administrasi ba
 where se.kelurahan_id = ba.id and ba.nama_kelurahan = 'Jatirasa' and se.sumber like 'REAL - %';
 
--- #38 Margajaya (Bekasi Selatan) — akses_pendidikan (0.81); catatan: n_akses_kesehatan & n_akses_kerja = 0 (kemungkinan data POI belum lengkap di kelurahan ini)
+-- #38 Margajaya (Bekasi Selatan) — akses_pendidikan (0.81)
+--   CATATAN ANALIS (jangan dimasukkan ke teks rekomendasi yang tampil di dashboard):
+--   n_akses_kesehatan & n_akses_kerja = 0 untuk kelurahan ini — kemungkinan data
+--   POI faskes/tempat kerja belum lengkap, bukan berarti kedua dimensi itu benar-benar
+--   baik. Verifikasi kelengkapan POI sebelum menarik kesimpulan atas dua dimensi tsb.
 update skor_equity se set
   kelompok_terdampak = array['pelajar & keluarga tanpa sekolah dalam jangkauan jalan kaki'],
-  rekomendasi_intervensi = 'Trip feeder sekolah dari Marga Jaya ke klaster sekolah Bekasi Selatan, tersambung koridor BisKita menuju Stasiun Bekasi. Catatan data: jarak faskes dan kerja kelurahan ini ternormalisasi 0 - verifikasi kelengkapan data POI sebelum menyimpulkan kedua dimensi itu memang baik.'
+  rekomendasi_intervensi = 'Trip feeder sekolah dari Marga Jaya ke klaster sekolah Bekasi Selatan, tersambung koridor BisKita menuju Stasiun Bekasi.'
 from batas_administrasi ba
 where se.kelurahan_id = ba.id and ba.nama_kelurahan = 'Margajaya' and se.sumber like 'REAL - %';
 
@@ -471,10 +483,14 @@ update skor_equity se set
 from batas_administrasi ba
 where se.kelurahan_id = ba.id and ba.nama_kelurahan = 'Jakasetia' and se.sumber like 'REAL - %';
 
--- #55 Pengasinan (Rawalumbu) — kepadatan (0.61); catatan: n_akses_pendidikan = 0 (kemungkinan data POI sekolah belum lengkap)
+-- #55 Pengasinan (Rawalumbu) — kepadatan (0.61)
+--   CATATAN ANALIS (jangan dimasukkan ke teks rekomendasi yang tampil di dashboard):
+--   n_akses_pendidikan = 0 untuk kelurahan ini — kemungkinan data POI sekolah belum
+--   lengkap, bukan berarti akses pendidikan benar-benar baik. Verifikasi POI sekolah
+--   sebelum menarik kesimpulan atas dimensi tsb.
 update skor_equity se set
   kelompok_terdampak = array['penduduk permukiman padat'],
-  rekomendasi_intervensi = 'Rapatkan halte BisKita di Jl. Pengasinan - Rawalumbu untuk permukiman padat. Catatan data: akses pendidikan ternormalisasi 0 - verifikasi data POI sekolah sebelum menyimpulkan dimensi itu memang baik.'
+  rekomendasi_intervensi = 'Rapatkan halte BisKita di Jl. Pengasinan - Rawalumbu untuk permukiman padat, dengan oper ke Stasiun Bekasi.'
 from batas_administrasi ba
 where se.kelurahan_id = ba.id and ba.nama_kelurahan = 'Pengasinan' and se.sumber like 'REAL - %';
 
@@ -486,9 +502,66 @@ from batas_administrasi ba
 where se.kelurahan_id = ba.id and ba.nama_kelurahan = 'Margamulya' and se.sumber like 'REAL - %';
 
 -- ============================================================
--- Verifikasi: seharusnya 0 baris REAL yang masih NULL setelah migration.
--- (Jalankan manual saat apply; bukan bagian transaksi.)
---   select count(*) from skor_equity
---   where sumber like 'REAL - %'
---     and (kelompok_terdampak is null or rekomendasi_intervensi is null);
+-- PRE-CHECK opsional (jalankan manual SEBELUM db push, tidak menerapkan apa pun):
+-- daftar literal nama_kelurahan di file ini yang TIDAK match ejaan NAMOBJ RBI
+-- di batas_administrasi. Kalau query ini mengembalikan baris, perbaiki ejaannya
+-- di statement UPDATE terkait sebelum push.
+--
+--   select v.nama
+--   from (values
+--     ('Arenjaya'),('Durenjaya'),('Kaliabang Tengah'),('Jatimurni'),
+--     ('Jatirahayu'),('Kalibaru'),('Pejuang'),('Jatimekar'),('Kranji'),
+--     ('Cikiwul'),('Jatirangga'),('Harapanbaru'),('Perwira'),('Teluk Pucung'),
+--     ('Kotabaru'),('Jaticempaka'),('Cimuning'),('Bantargebang'),('Bintarajaya'),
+--     ('Harapanmulya'),('Jatikarya'),('Jatimelati'),('Jatibening Baru'),
+--     ('Sumurbatu'),('Bintara'),('Jatiwaringin'),('Jatikramat'),('Harapanjaya'),
+--     ('Jakasampurna'),('Pekayonjaya'),('Bekasijaya'),('Mustikajaya'),
+--     ('Padurenan'),('Jatisari'),('Margahayu'),('Jatiranggon'),('Jatirasa'),
+--     ('Margajaya'),('Medansatria'),('Jatiasih'),('Jatimakmur'),('Jatibening'),
+--     ('Jatisampurna'),('Jatiraden'),('Ciketingudik'),('Kayuringinjaya'),
+--     ('Jatiwarna'),('Mustikasari'),('Jatiluhur'),('Jakamulya'),('Sepanjangjaya'),
+--     ('Bojong Rawalumbu'),('Bojongmenteng'),('Jakasetia'),('Pengasinan'),
+--     ('Margamulya')
+--   ) as v(nama)
+--   left join batas_administrasi ba on ba.nama_kelurahan = v.nama
+--   where ba.id is null;
 -- ============================================================
+
+-- ============================================================
+-- GUARD HASIL (DIEKSEKUSI, bukan komentar).
+-- Kalau ada literal nama_kelurahan di atas yang tidak match ejaan NAMOBJ RBI,
+-- UPDATE-nya mengenai 0 baris TANPA error dan baris REAL-nya tetap NULL.
+-- Blok ini menggagalkan migration di titik itu — dengan menyebut nama asli
+-- dari DB — alih-alih "sukses" diam-diam dengan dashboard bolong.
+-- ============================================================
+do $$
+declare
+  n_null int;
+  sisa   text;
+  n_isi  int;
+begin
+  select count(*),
+         string_agg(ba.nama_kelurahan, ', ' order by se.ranking)
+    into n_null, sisa
+  from skor_equity se
+  join batas_administrasi ba on ba.id = se.kelurahan_id
+  where se.sumber like 'REAL - %'
+    and (se.kelompok_terdampak is null or se.rekomendasi_intervensi is null);
+
+  if n_null > 0 then
+    raise exception
+      '014 GAGAL: % baris REAL skor_equity masih NULL (kelurahan: %). Cek ejaan literal nama_kelurahan di migration ini vs batas_administrasi.nama_kelurahan.',
+      n_null, sisa;
+  end if;
+
+  -- sanity: pastikan tepat 56 baris REAL yang terisi, bukan lebih/kurang
+  select count(*) into n_isi
+  from skor_equity
+  where sumber like 'REAL - %'
+    and kelompok_terdampak is not null
+    and rekomendasi_intervensi is not null;
+
+  if n_isi <> 56 then
+    raise exception '014 GAGAL: mengharapkan 56 baris REAL terisi, dapat %.', n_isi;
+  end if;
+end $$;
