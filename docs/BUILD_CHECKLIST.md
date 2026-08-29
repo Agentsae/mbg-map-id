@@ -18,32 +18,32 @@ Checklist ini bukan pengganti PRD — kalau ada perbedaan, PRD (Bab 8, acceptanc
 
 ## Fase 1 — Fondasi frontend (paralel dengan survei, 🟢 semua)
 
-- [ ] Layout shell sesuai wireframe resmi (Gambar 3 PRD): sidebar 8 menu (Dashboard, Peta Interaktif, Analisis Spasial, AI Spatial Consultant, Simulasi Skenario, Rekomendasi, Data & Laporan, Pengaturan)
-- [ ] Peta dasar tampil dengan basemap MAPID Maps + kontrol layer (zoom, pilih layer, legenda)
-- [ ] Card ringkasan Kota Bekasi (populasi, kepadatan, luas, usia produktif) — angka ini SUDAH FINAL dari PRD Bab 1, tidak perlu tunggu survei: 2.595.927 jiwa, 12.333 jiwa/km², 210,49 km², 70,99%
-- [ ] Kerangka Dashboard Indikator (coverage ratio, jumlah transit desert, potensi penerima manfaat) dengan data dummy
+- [x] Layout shell sesuai wireframe resmi (Gambar 3 PRD): sidebar 8 menu (Dashboard, Peta Interaktif, Analisis Spasial, AI Spatial Consultant, Simulasi Skenario, Rekomendasi, Data & Laporan, Pengaturan) — diverifikasi 28 Agu: `App.jsx` sidebar 8 menu persis sesuai wireframe
+- [x] Peta dasar tampil dengan basemap MAPID Maps + kontrol layer (zoom, pilih layer, legenda) — diverifikasi 28 Agu (qa-tester): style MAPID `street-2d-building` + tiles + glyph + sprite semua HTTP 200, `MapView.jsx` NavigationControl + layer GeoJSON generik, `MapLegend.jsx` ada
+- [x] Card ringkasan Kota Bekasi (populasi, kepadatan, luas, usia produktif, indeks aksesibilitas rata-rata) — dibangun + diverifikasi 28 Agu (qa-tester 8/8 lulus): section "Ringkasan Kota Bekasi" 5 kartu di `Dashboard.jsx`, sumber kebenaran tunggal `frontend/src/lib/kotaProfil.js` ← `etl/data/demografi/profil_kota_kanonik.json`, diseragamkan ke **DKB Semester I 2026**: 2.607.248 jiwa, 12.387 jiwa/km² (diturunkan = populasi ÷ 210,49), 210,49 km² (luas BPS), usia produktif 15–64 th 70,98% (= 1.850.727 jiwa). Populasi kartu = `SELECT sum(jumlah_penduduk) FROM penduduk` = basis RPC `simulate_new_stop` (anti-drift dikonfirmasi). Jangan reintroduksi angka lama (2.595.927 / 12.333 / 70,99 / "DKB Semester II 2025").
+- [x] Kerangka Dashboard Indikator (coverage ratio, jumlah transit desert, potensi penerima manfaat) dengan data dummy — diverifikasi 28 Agu: `Dashboard.jsx` kartu Transit Desert (1.517 grid `skor_tdi > 0.6`) + Potensi Penerima Manfaat + BarChart coverage per kecamatan, dengan fallback demo
 - [x] Kerangka panel AI Spatial Consultant (chat UI) dengan respons dummy/hardcoded dulu — diverifikasi 25 Agu: `AIPanel.jsx` punya chat UI lengkap (input, riwayat pesan, ranking list) dan fallback `DEMO_RESPONSE` saat Supabase belum tersambung
-- [ ] Kerangka panel Simulasi Skenario (dropdown pilih skenario + tombol "Lihat Hasil Simulasi") sesuai mockup
+- [ ] Kerangka panel Simulasi Skenario (dropdown pilih skenario + tombol "Lihat Hasil Simulasi") sesuai mockup — FUNGSIONAL sudah ada (klik titik di peta → RPC → `SimulationPanel.jsx`), tapi presentasi belum berbentuk dropdown skenario sesuai Gambar 3. Prioritas rendah (acceptance criteria Bab 8 sudah terpenuhi lewat alur klik-peta)
 
 ## Fase 2 — Logika inti (🟢 bisa mulai dengan data sintetis)
 
 - [x] Formula Composite Accessibility Index (weighted overlay) — implementasi + uji dengan 4-5 titik data buatan sendiri dulu — diverifikasi 25 Agu: `etl/compute_scores.py` `compute_cai()` + `sensitivity_check()` jalan dengan 4 titik data sintetis (`load_demo_data()`)
-- [ ] Endpoint/RPC `simulate_new_stop` — hitung penduduk terlayani radius 400m/800m dari data sintetis
-- [ ] Klik lokasi di peta → panel rincian skor per kriteria muncul (acceptance criteria: bukan angka tunggal)
-- [ ] Cek kecepatan: filter peta per kecamatan **< 2 detik**, simulasi **< 3 detik** — uji dari awal dengan data dummy, jangan tunggu data asli untuk sadar ada masalah performa
+- [x] Endpoint/RPC `simulate_new_stop` — hitung penduduk terlayani radius 400m/800m — diverifikasi 28 Agu (qa-tester): migration `003` + fix `012` (basis populasi = `grid_analisis.kepadatan_penduduk` asli, bukan dummy). ~20 titik dalam kota → `penduduk_terlayani` > 0, tidak ada null; tidak ada regresi pasca hapus data dummy
+- [x] Klik lokasi di peta → panel rincian skor per kriteria muncul (acceptance criteria: bukan angka tunggal) — diverifikasi 28 Agu: `CaiScorePanel.jsx`, `App.jsx` select kolom breakdown `skor_cai` (`n_kepadatan`/`n_jarak_inv`/`n_volume`/`n_survei` + bobot)
+- [x] Cek kecepatan: filter peta per kecamatan **< 2 detik**, simulasi **< 3 detik** — diverifikasi 28 Agu (qa-tester, volume data asli 2.607 grid): filter per-kecamatan in-memory median 0,56 ms (max 3 ms); simulasi median ~250–350 ms, worst ~700 ms (via WAN). Sisa: 1 konfirmasi devtools Performance untuk angka repaint MapLibre riil
 
 ## Fase 3 — Integrasi AI (🟢 bisa mulai dengan skor dummy)
 
-- [ ] Edge Function AI Spatial Consultant: terima skor (dummy dulu) → kirim ke LLM dengan prompt terstruktur → kembalikan narasi
-- [ ] Validasi: pastikan narasi AI tidak menyebut angka yang tidak ada di data asal
-- [ ] Cek kecepatan respons **< 5 detik**
-- [ ] Contoh query dari PRD Lampiran untuk uji: *"Di mana titik prioritas halte baru di Kecamatan Mustika Jaya?"*
+- [x] Edge Function AI Spatial Consultant: terima skor → kirim ke LLM dengan prompt terstruktur → kembalikan narasi — `supabase/functions/ai-insight/index.ts` lengkap & pernah deploy; diverifikasi 28 Agu jalur ambil-data + rakit-prompt jalan sampai memanggil Claude (payload hanya baris `skor_equity`, tidak ada raw coordinates / angka profil kota hardcoded)
+- [ ] Validasi: pastikan narasi AI tidak menyebut angka yang tidak ada di data asal — **TER-BLOK**: billing Anthropic belum aktif (`ai-insight` → HTTP 500 "credit balance too low"). Uji begitu kredit aktif
+- [ ] Cek kecepatan respons **< 5 detik** — **TER-BLOK** billing Anthropic (sda)
+- [ ] Contoh query dari PRD Lampiran untuk uji: *"Di mana titik prioritas halte baru di Kecamatan Mustika Jaya?"* — **TER-BLOK** billing Anthropic (sda)
 
 ## Fase 4 — Swap ke data asli (🟡 mulai begitu data processing selesai, ~31 Agu–6 Sep)
 
 - [ ] Upload hasil olahan data kependudukan/POI/halte ke tabel Supabase (ganti data sintetis)
 - [ ] Hitung ulang CAI/TDI/Transit Equity Index dengan bobot AHP final (bukan bobot dummy)
-- [ ] Isi Transit Equity Index Dashboard dengan ranking 5+ kelurahan asli beserta rekomendasi intervensi (ranking 1 = `skor_final` TERTINGGI = kelurahan paling tertinggal/butuh intervensi — lihat catatan arah skala di CLAUDE.md bagian Struktur Data, jangan urutkan terbalik)
+- [~] Isi Transit Equity Index Dashboard dengan ranking 5+ kelurahan asli beserta rekomendasi intervensi (ranking 1 = `skor_final` TERTINGGI = kelurahan paling tertinggal/butuh intervensi — lihat catatan arah skala di CLAUDE.md bagian Struktur Data, jangan urutkan terbalik) — ranking 56 kelurahan + skor + rincian kriteria SUDAH ADA & arah skala benar (Arenjaya #1). `kelompok_terdampak` + `rekomendasi_intervensi` sebelumnya NULL semua → migration `014_equity_kelompok_rekomendasi_isi.sql` dibuat 28 Agu (deterministik dari dimensi kerentanan, ditelusuri), **menunggu review + `db push`**
 - [ ] Re-validasi acceptance criteria kecepatan dengan volume data asli (bisa beda dari data dummy yang lebih kecil)
 
 ## Fase 5 — Fitur pendukung & finishing (🟢 kapan saja, prioritas rendah)

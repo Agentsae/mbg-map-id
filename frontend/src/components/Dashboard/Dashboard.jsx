@@ -1,8 +1,23 @@
 import { useEffect, useState } from 'react'
-import { BarChart3, MapPinOff, Users } from 'lucide-react'
+import { BarChart3, MapPinOff, Users, Grid3x3, Map as MapIcon, Briefcase, Gauge } from 'lucide-react'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
 import { supabase, isConfigured } from '../../lib/supabaseClient'
 import { fetchAllRows } from '../../lib/fetchAllRows'
+import { KOTA_PROFIL } from '../../lib/kotaProfil'
+
+const fmtInt = (n) => Number(n).toLocaleString('id-ID')
+const fmtDec = (n, d = 2) =>
+  Number(n).toLocaleString('id-ID', { minimumFractionDigits: d, maximumFractionDigits: d })
+
+// Ringkasan Kota Bekasi (mockup PRD Gambar 3, panel ringkasan kota). Nilai
+// demo = angka kanonik dari KOTA_PROFIL; dipakai kalau Supabase belum
+// tersambung / query gagal.
+const DEMO_RINGKASAN = {
+  populasi: KOTA_PROFIL.populasi_fallback,
+  kepadatan: KOTA_PROFIL.kepadatan_fallback,
+  indeksAksesibilitas: KOTA_PROFIL.indeks_aksesibilitas_fallback,
+  indeksAksesibilitasN: null,
+}
 
 // Data contoh — 12 kecamatan Kota Bekasi. Ganti dengan hasil query
 // coverage ratio sesungguhnya begitu skor_cai/grid_analisis terisi.
@@ -41,8 +56,75 @@ export default function Dashboard() {
   const [potensiPenerimaManfaat, setPotensiPenerimaManfaat] = useState(DEMO_POTENSI_PENERIMA_MANFAAT)
   const [usingDemoPenerima, setUsingDemoPenerima] = useState(!isConfigured)
 
+  // Ringkasan Kota Bekasi
+  const [ringkasan, setRingkasan] = useState(DEMO_RINGKASAN)
+  const [usingDemoPopulasi, setUsingDemoPopulasi] = useState(!isConfigured)
+  const [usingDemoIndeks, setUsingDemoIndeks] = useState(!isConfigured)
+  const [ringkasanLoading, setRingkasanLoading] = useState(isConfigured)
+
   useEffect(() => {
     if (!isConfigured) return
+
+    // --- Ringkasan Kota Bekasi ---
+    // Populasi: sum(jumlah_penduduk) dari `penduduk` (56 baris agregat per
+    // kelurahan — jauh di bawah cap 1000 baris PostgREST, jadi tidak perlu
+    // fetchAllRows). Basis ini harus sama dengan yang dipakai RPC
+    // simulate_new_stop (2.607.248). Kepadatan diturunkan = populasi /
+    // luas (KOTA_PROFIL.luas_km2), tidak di-hardcode, supaya konsisten
+    // kalau data penduduk berubah.
+    //
+    // Indeks aksesibilitas rata-rata: rata-rata `skor_final` dari `skor_cai`
+    // (Composite Accessibility Index per titik kandidat tersurvei). Dipilih
+    // daripada grid_analisis.skor_aksesibilitas_transit karena: (a) skor_cai
+    // adalah CAI resmi yang sama persis dengan yang ditampilkan saat user
+    // klik peta — bisa ditelusuri; (b) query ringan (~70 baris). Kelemahan:
+    // titik kandidat sengaja disampel di lokasi yang diduga bermasalah, jadi
+    // ini rata-rata "di titik kandidat", bukan rata-rata spasial se-kota —
+    // karena itu kartunya diberi caption "berdasarkan N titik kandidat".
+    // TODO(data-ai-analyst): kalau grid_analisis.skor_aksesibilitas_transit
+    // sudah terisi penuh se-kota, pertimbangkan pakai itu untuk rata-rata
+    // spasial yang lebih representatif (butuh fetchAllRows, 2.607 baris).
+    Promise.all([
+      supabase.from('penduduk').select('jumlah_penduduk'),
+      supabase.from('skor_cai').select('skor_final'),
+    ]).then(([pendudukRes, caiRes]) => {
+      const next = { ...DEMO_RINGKASAN }
+
+      const pendudukRows = pendudukRes.data
+      if (!pendudukRes.error && pendudukRows?.length) {
+        const total = pendudukRows.reduce((s, r) => s + (r.jumlah_penduduk ?? 0), 0)
+        if (total > 0) {
+          next.populasi = total
+          next.kepadatan = Math.round(total / KOTA_PROFIL.luas_km2)
+          setUsingDemoPopulasi(false)
+        } else {
+          setUsingDemoPopulasi(true)
+        }
+      } else {
+        setUsingDemoPopulasi(true)
+      }
+
+      const caiRows = caiRes.data
+      const caiVals =
+        !caiRes.error && caiRows?.length
+          ? caiRows.map((r) => r.skor_final).filter((v) => v != null).map(Number)
+          : []
+      if (caiVals.length) {
+        next.indeksAksesibilitas = caiVals.reduce((s, v) => s + v, 0) / caiVals.length
+        next.indeksAksesibilitasN = caiVals.length
+        setUsingDemoIndeks(false)
+      } else {
+        setUsingDemoIndeks(true)
+      }
+
+      setRingkasan(next)
+      setRingkasanLoading(false)
+    }).catch(() => {
+      // Network error dsb — jatuh ke angka kanonik KOTA_PROFIL (mode demo).
+      setUsingDemoPopulasi(true)
+      setUsingDemoIndeks(true)
+      setRingkasanLoading(false)
+    })
 
     // TODO: sesuaikan nama tabel/kolom dengan hasil akhir skema kalian.
     // Contoh query coverage ratio per kecamatan dari grid_analisis. Cukup
@@ -121,6 +203,61 @@ export default function Dashboard() {
         </div>
       )}
 
+      <div className="px-4 pt-4">
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400 mb-2">
+          Ringkasan Kota Bekasi
+        </p>
+        <div className="grid grid-cols-2 gap-3">
+          <StatCard
+            icon={Users}
+            label="Populasi"
+            value={ringkasanLoading ? '—' : fmtInt(ringkasan.populasi)}
+            unit="jiwa"
+            sub={usingDemoPopulasi ? 'angka kanonik DKB Semester I 2026' : 'DKB Semester I 2026'}
+            usingDemo={usingDemoPopulasi}
+            demoHint="Gagal memuat tabel penduduk — memakai angka kanonik DKB Semester I 2026"
+          />
+          <StatCard
+            icon={Grid3x3}
+            label="Kepadatan"
+            value={ringkasanLoading ? '—' : fmtInt(ringkasan.kepadatan)}
+            unit="jiwa/km²"
+            sub="diturunkan: populasi ÷ 210,49 km²"
+            usingDemo={usingDemoPopulasi}
+            demoHint="Diturunkan dari populasi fallback kanonik dibagi luas wilayah BPS"
+          />
+          <StatCard
+            icon={MapIcon}
+            label="Luas Wilayah"
+            value={fmtDec(KOTA_PROFIL.luas_km2)}
+            unit="km²"
+            sub="BPS Kota Bekasi Dalam Angka"
+          />
+          <StatCard
+            icon={Briefcase}
+            label="Usia Produktif"
+            value={`${fmtDec(KOTA_PROFIL.usia_produktif_persen)}%`}
+            unit={`${fmtInt(KOTA_PROFIL.usia_produktif_jiwa)} jiwa`}
+            sub="DKB Semester I 2026"
+            hint={`${KOTA_PROFIL.usia_produktif_definisi} (usia 15–64 tahun)`}
+          />
+          <StatCard
+            icon={Gauge}
+            label="Indeks Aksesibilitas Rata-rata"
+            value={ringkasanLoading ? '—' : fmtDec(ringkasan.indeksAksesibilitas)}
+            unit="skala 0–1 (CAI)"
+            sub={
+              usingDemoIndeks
+                ? 'estimasi sementara (skor_cai belum terisi)'
+                : `berdasarkan ${ringkasan.indeksAksesibilitasN} titik kandidat`
+            }
+            usingDemo={usingDemoIndeks}
+            demoHint="Tabel skor_cai belum berisi skor_final — menampilkan estimasi sementara"
+            hint="Rata-rata skor_final tabel skor_cai (Composite Accessibility Index) pada titik kandidat tersurvei"
+          />
+        </div>
+      </div>
+
       <div className="px-4 pt-4 grid grid-cols-2 gap-3">
         <StatCard
           icon={MapPinOff}
@@ -159,18 +296,25 @@ export default function Dashboard() {
 // TODO(ui-ux-designer): kartu ringkasan ini masih styling generik (belum
 // disesuaikan dengan sistem kartu resmi mockup PRD Gambar 3) — asumsi wajar
 // dipakai dulu supaya data sudah tampil.
-function StatCard({ icon: Icon, label, value, unit, usingDemo }) {
+function StatCard({ icon: Icon, label, value, unit, sub, usingDemo, demoHint, hint }) {
   return (
     <div className="bg-white border border-slate-200 rounded-lg p-3 relative">
       <div className="flex items-center gap-2 text-slate-400 mb-1">
         <Icon size={14} />
-        <span className="text-[11px] font-medium uppercase tracking-wide">{label}</span>
+        <span
+          className="text-[11px] font-medium uppercase tracking-wide"
+          title={hint || undefined}
+        >
+          {label}
+          {hint && <span className="ml-1 text-slate-300 normal-case">ⓘ</span>}
+        </span>
       </div>
       <p className="text-2xl font-bold text-slate-800 leading-tight">{value}</p>
       <p className="text-[11px] text-slate-400">{unit}</p>
+      {sub && <p className="text-[10px] text-slate-300 mt-0.5 leading-tight">{sub}</p>}
       {usingDemo && (
         <span
-          title="Menampilkan data contoh — sambungkan grid_analisis untuk data asli"
+          title={demoHint || 'Menampilkan data contoh — sambungkan grid_analisis untuk data asli'}
           className="absolute top-2 right-2 text-[9px] bg-amber-50 text-amber-700 border border-amber-200 rounded px-1.5 py-0.5"
         >
           demo

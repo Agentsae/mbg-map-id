@@ -52,6 +52,7 @@ Prinsip inti yang TIDAK BOLEH dilanggar saat implementasi:
   dirugikan" di UI — pertahankan konvensi ini di narasi AI, dokumen, dan kode baru mana pun yang
   menyebut istilah ini.
 - Simulasi What-If pakai estimasi jalan kaki (kecepatan 4–5 km/jam), BUKAN network routing riil (eksplisit out-of-scope).
+- **Angka profil Kota Bekasi (kanonik, diseragamkan tim 2026-08-28).** Sumber kebenaran: `etl/data/demografi/profil_kota_kanonik.json`, dari **DKB Semester I 2026** (Dinas Dukcapil Kota Bekasi): **2.607.248 jiwa / 12.387 jiwa/km² / 210,49 km²** (luas BPS Kota Bekasi Dalam Angka) / **usia produktif 15–64 th 70,98%** (= 1.850.727 jiwa). Populasi kanonik = Σ `penduduk.jumlah_penduduk` di database. JANGAN reintroduksi angka lama `2.595.927`, `12.333`, `70,99`, atau sumber "DKB Semester II 2025" di kode, dokumen, maupun narasi AI.
 
 ## Fitur & Acceptance Criteria (sumber: PRD Bab 8 — pakai ini sebagai definition of done)
 

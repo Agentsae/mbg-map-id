@@ -549,14 +549,14 @@ total 2.607.248 jiwa, `etl/load_penduduk.py`) — semua 56 kelurahan cocok ke `b
 2.607 cell (300m), assert konservasi populasi lolos. Detail di baris tabel Kategori B & E di
 bawah.
 
-**⚠️ ISU TERBUKA — perlu keputusan tim, didelegasikan ke `product-analyst`**: PRD/proposal saat
-ini mengutip DKB **Semester II 2025 = 2.595.927 jiwa**. Data yang baru diupload adalah DKB
-**Semester I 2026 = 2.607.248 jiwa** (lebih baru, lengkap per kelurahan, dipakai karena itu yang
-tersedia). Selisih ~11.321 jiwa (0,4%) — kecil secara persentase tapi PRD & angka di database
-sekarang TIDAK sinkron. Perlu diputuskan: update semua kutipan angka penduduk kota di
-PRD/proposal/dashboard ke Semester I 2026, atau ganti sumber data ke Semester II 2025 supaya
-sinkron dengan yang sudah ditulis. Belum diputuskan sendiri oleh `data-ai-analyst` — di luar
-kewenangan mengubah angka resmi proposal.
+**✅ RESOLVED 2026-08-28**: PRD/proposal sebelumnya mengutip DKB Semester II 2025 = 2.595.927
+jiwa; data di database adalah DKB Semester I 2026 = 2.607.248 jiwa (selisih ~11.321 jiwa /
+0,4%). **Keputusan tim (2026-08-28): adopsi DKB Semester I 2026 sebagai angka kanonik.** PRD
+Bab 1 diperbarui ke angka baru; selisih terhadap versi proposal lama dicatat sebagai errata di
+laporan akhir. Blok kanonik final ada di `etl/data/demografi/profil_kota_kanonik.json`:
+2.607.248 jiwa / 12.387 jiwa/km² (2.607.248 / 210,49) / 210,49 km² (luas BPS, tidak berubah) /
+usia produktif 15–64 th 70,98% = 1.850.727 jiwa. `CLAUDE.md` dan `docs/BUILD_CHECKLIST.md`
+sudah disinkronkan. Angka lama (2.595.927 / 12.333 / 70,99) tidak boleh dipakai lagi.
 
 ## ⏳ Update 27 Agustus (lanjutan, sore): ETL siap, upload TERTAHAN di migration schema
 
@@ -650,7 +650,7 @@ Bekasi Dalam Angka, di-join lewat nama kelurahan (`NAMOBJ`) ke boundary asli ini
 | Data | Status | Index | Cara mendapatkan | Sebelum 13 Sep? |
 |---|---|---|---|---|
 | Batas administrasi kelurahan/kecamatan (poligon asli) | ⏳ **ETL SIAP, upload TERTAHAN 27 Agu (sore)** — `etl/build_admin_boundaries_from_rbi.py` sudah ditulis & dry-run terverifikasi (12 kecamatan, 56 kelurahan, luas cocok BPS ~3% selisih). Upload sebenarnya (`--upload`) + migration `008_batas_administrasi_sumber.sql` BELUM diterapkan — `db push`/query probe ditolak permission classifier sesi ini, perlu Sam jalankan manual di terminal sendiri. Strategi migrasi ADDITIVE (tidak collision nama dgn 6 dummy, tidak menghapus apa pun) — lihat catatan lengkap di atas. | Fondasi spasial semua tabel | 1) `npx supabase db push --project-ref=vpymlmaebvfmpowomsec` (atau paste `008_batas_administrasi_sumber.sql` ke SQL Editor) 2) `python etl/build_admin_boundaries_from_rbi.py --upload` | Ya — tinggal 2 langkah manual di atas, sumber data & script sudah siap |
-| Jumlah penduduk + proporsi lansia/balita per kelurahan | ✅ **SELESAI 27 Agu** — 56 baris asli di tabel `penduduk` (`sumber='Disdukcapil Kota Bekasi - DKB Semester 1 2026'`), 56/56 kelurahan cocok ke `batas_administrasi` (RBI), total 2.607.248 jiwa, tidak ada warning cross-validation (PRODUKTIF_NON = JUMDUK di semua baris). 24 baris sintetis lama dipertahankan berdampingan (FK ke 6 kelurahan dummy, masih dipakai testing RPC `simulate_new_stop`) — additive, bukan replace. **⚠️ Isu terbuka**: angka ini (DKB Semester I 2026) BEDA dengan yang dikutip PRD/proposal saat ini (DKB Semester II 2025 = 2.595.927 jiwa) — perlu sinkronisasi dokumen, lihat catatan di bawah. | `n_kepadatan` CAI (bobot 0.35, terbesar), TDI, Equity | `etl/load_penduduk.py --excel etl/data/demografi/DAK_SEMESTER_1_TAHUN_2026_REV01.xlsx` | Selesai |
+| Jumlah penduduk + proporsi lansia/balita per kelurahan | ✅ **SELESAI 27 Agu** — 56 baris asli di tabel `penduduk` (`sumber='Disdukcapil Kota Bekasi - DKB Semester 1 2026'`), 56/56 kelurahan cocok ke `batas_administrasi` (RBI), total 2.607.248 jiwa, tidak ada warning cross-validation (PRODUKTIF_NON = JUMDUK di semua baris). 24 baris sintetis lama dipertahankan berdampingan (FK ke 6 kelurahan dummy, masih dipakai testing RPC `simulate_new_stop`) — additive, bukan replace. **✅ RESOLVED 2026-08-28**: DKB Semester I 2026 (2.607.248 jiwa) diadopsi sebagai angka kanonik tim; PRD Bab 1 diperbarui, selisih vs proposal lama (2.595.927) jadi errata di laporan akhir. Sumber tunggal: `etl/data/demografi/profil_kota_kanonik.json`. Lihat catatan RESOLVED di bawah. | `n_kepadatan` CAI (bobot 0.35, terbesar), TDI, Equity | `etl/load_penduduk.py --excel etl/data/demografi/DAK_SEMESTER_1_TAHUN_2026_REV01.xlsx` | Selesai |
 | Rasio rumah tangga tanpa kendaraan pribadi | Tidak ada — kode sudah fallback netral 0.5 | TDI (Indeks Kebutuhan Mobilitas) | BPS Susenas (granularitas kelurahan jarang publik) | **Realistis tetap fallback 0.5** — jangan diperjuangkan mati-matian |
 | POI sekolah | ✅ **SELESAI 26 Agu** — 330 baris nyata dari OSM di tabel `poi` (`sumber='OpenStreetMap'`), 5 baris dummy lama tetap ada terpisah | `n_jarak_inv` CAI, TDI, Equity | Ditarik via `etl/fetch_upload_osm_poi.py` (Overpass API, `amenity=school`) | Selesai |
 | POI faskes | ✅ **SELESAI 26 Agu** — 162 baris nyata dari OSM | Sama seperti di atas | Sama, `amenity=hospital/clinic` + `healthcare=*` | Selesai |

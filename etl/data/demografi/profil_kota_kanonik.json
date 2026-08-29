@@ -1,0 +1,14 @@
+{
+  "sumber": "DAK/DKB Semester I Tahun 2026 (Dinas Dukcapil Kota Bekasi) — file DAK_SEMESTER_1_TAHUN_2026_REV01.xlsx, sheet PRODUKTIF_NON & JUMDUK_KELUMUR",
+  "tanggal_rilis": "2026 Semester I",
+  "total_penduduk": 2607248,
+  "usia_produktif_persen": 70.98,
+  "usia_produktif_definisi": "usia 15-64 tahun (kolom USIA_PRODUKTIF sheet PRODUKTIF_NON = jumlah kelompok umur 15-19 s/d 60-64 pada sheet JUMDUK_KELUMUR); usia muda 0-14 th, usia tua 65+ th",
+  "usia_produktif_jiwa": 1850727,
+  "usia_muda_jiwa": 587864,
+  "usia_tua_jiwa": 168657,
+  "luas_km2": 210.49,
+  "luas_sumber": "BPS Kota Bekasi Dalam Angka",
+  "kepadatan_jiwa_per_km2": 12387,
+  "catatan": "menggantikan angka DKB Sem II 2025 (2.595.927) yang dikutip proposal; selisih 0,44% tidak material. Angka 2.572.209 yang muncul di blok referensi kanan sheet JUMDUK adalah kolom pembanding lama/sekunder dan BUKAN DKB Sem I 2026 — diabaikan. Total tervalidasi: rekonsiliasi 12 kecamatan dan 56 kelurahan sama-sama menjumlah 2.607.248."
+}

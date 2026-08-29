@@ -11,13 +11,11 @@ Sumber: DAK_SEMESTER_1_TAHUN_2026_REV01.xlsx (Disdukcapil Kota Bekasi,
 DKB Semester 1 Tahun 2026) — diambil dari publikasi resmi
 disdukcapil.bekasikota.go.id.
 
-⚠️ CATATAN PENTING: proposal/PRD saat ini mengutip DKB Semester II 2025
-(2.595.927 jiwa). File ini DKB Semester 1 2026 (2.607.248 jiwa) — data
-lebih baru. LAPORKAN ke tim (bukan diputuskan sendiri oleh script ini):
-update semua kutipan di proposal/PRD ke angka Semester 1 2026 ini (lebih
-konsisten & terkini), atau tetap pakai Semester II 2025 untuk sinkron
-dengan yang sudah ditulis. Kode ini memakai Semester 1 2026 karena itu
-yang tersedia lengkap per kelurahan.
+CATATAN: tim memutuskan (2026-08-28) menyeragamkan seluruh angka profil
+Kota Bekasi ke DKB Semester 1 2026 (2.607.248 jiwa) — menggantikan DKB
+Semester II 2025 (2.595.927 jiwa) yang dikutip proposal awal. Selisih
+0,44% tidak material; PRD Bab 1 sudah diperbarui, errata dicatat di
+laporan akhir. Sumber kebenaran tunggal: etl/data/demografi/profil_kota_kanonik.json.
 
 Pola koneksi Supabase (SENGAJA disamakan dgn upload_to_supabase.py — pakai
 supabase-py + SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY dari etl/.env, BUKAN
@@ -269,7 +267,7 @@ def main():
     print(f"Total kelurahan terbaca: {len(rows)}")
     total_penduduk = sum(r["jumlah_penduduk"] for r in rows)
     print(f"Total penduduk (jumlah {len(rows)} kelurahan): {total_penduduk:,}")
-    print("(Bandingkan: PRODUKTIF_NON KOTA BEKASI = 2.607.248; proposal saat ini masih kutip DKB Sem.II 2025 = 2.595.927)")
+    print("(Cek: PRODUKTIF_NON KOTA BEKASI = 2.607.248 — angka kanonik DKB Sem.I 2026)")
     print()
 
     if warnings:
