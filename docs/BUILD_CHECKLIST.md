@@ -9,6 +9,39 @@ Checklist ini bukan pengganti PRD — kalau ada perbedaan, PRD (Bab 8, acceptanc
 
 ---
 
+## Gap PRD belum diterapkan — audit 1 Sep 2026 (bahas & kerjakan 2 Sep)
+
+Hasil audit PRD final (`docs/MBG_PRD_GeoTransitInsight.pdf` hal. 1–22) vs kode saat ini.
+Diurutkan: acceptance criteria Bab 8 dulu, lalu metodologi, desain, wireframe, terjadwal.
+Yang sudah ADA di fase-fase di bawah tidak diulang di sini — ini yang belum tercatat / belum jelas statusnya.
+
+### A. Acceptance Criteria (Bab 8) belum terpenuhi penuh
+- [ ] **Export Report (PDF/gambar)** — Bab 8 + User Flow Bab 10.1 (langkah terakhir) + In-Scope Bab 3.1. Sekarang tab "Data & Laporan" = placeholder `ComingSoon`. (juga tercatat di Fase 5)
+- [ ] **TDI klik-untuk-rincian** — Bab 8: "CAI **& TDI** — tiap lokasi tampilkan skor + rincian kontribusi tiap kriteria saat diklik". Sekarang hanya CAI (`CaiScorePanel.jsx`). TDI cuma choropleth di Analisis Spasial, tidak ada breakdown per sel (Kepadatan × Indeks Kebutuhan Mobilitas ÷ Skor Aksesibilitas Transit).
+- [ ] **Dashboard "coverage ratio per kecamatan" masih data demo** — `Dashboard.jsx` sengaja `usingDemo=true` permanen + render `DEMO_DATA` 6 kecamatan hardcoded walau Supabase tersambung ("agregasi coverage ratio asli per kecamatan belum diimplementasikan"). Bab 8: "dari data yang telah divalidasi".
+- [ ] **Transit Equity Index — `kelompok_terdampak` + `rekomendasi_intervensi` NULL untuk 53/56 kelurahan** — migration `014_equity_kelompok_rekomendasi_isi.sql` sudah dibuat tapi **belum di-`db push`**. Bab 8 wajib keduanya per kelurahan. (juga tercatat di Fase 4)
+- [ ] **AI Spatial Consultant < 5 detik** — jalur Claude riil belum teruji end-to-end (billing Anthropic belum aktif). Fallback template sudah jalan. (juga di Fase 3)
+
+### B. Metodologi (Bab 7) baru sebagian
+- [ ] **Narasi AI jalur LLM belum ikut kerangka CCIA / SMART Spasial (Bab 7.5)** — `systemPrompt` di `ai-insight/index.ts` cuma "jelaskan skor… maksimal 4 kalimat", tanpa struktur Condition→Cause→Impact→Action dan tanpa instruksi SMART Spasial. Hanya fallback template deterministik (`buildTemplateNarasi`) yang sudah CCIA. Tambahan: tahap Action tidak bisa "SMART Spasial" dengan angka "+N jiwa" riil karena `ai-insight` tidak pernah menerima output simulasi What-If — cuma meneruskan teks `rekomendasi_intervensi` dari DB.
+
+### C. Desain visual (Bab 10.3) belum diterapkan
+- [ ] **Legenda belum colorblind-safe** — Bab 10.3 eksplisit: ganti skema merah–oranye–hijau ke palet sequential (Viridis/ColorBrewer) + tambah pembeda non-warna (label angka / pola). `AnalisisSpasial.jsx` masih `GAP_COLORS = ['#1a9850', '#d73027']` (hijau→merah diverging, persis yang ditandai), legenda choropleth cuma gradient + teks "rendah → tinggi" tanpa angka/pola.
+
+### D. Elemen wireframe (Bab 10.2 / Gambar 6) — prioritas lebih rendah
+- [ ] **Simulasi Skenario** wireframe pakai "dropdown pilihan skenario"; build sekarang klik-peta saja. Acceptance criteria tetap terpenuhi lewat alur klik. (juga di Fase 1)
+- [ ] **Kartu dashboard dari mockup belum ada:** "Usulan Halte Prioritas" dan "Top 3 Rekomendasi AI" (skor dampak / potensi manfaat / estimasi biaya).
+- [ ] **Data & Laporan + Pengaturan** placeholder — PRD hal. 18–19 sendiri sudah mengakui ini "placeholder/finishing".
+
+### E. Terjadwal, belum mulai
+- [ ] **Fase 4 — swap data asli**: upload data kependudukan/POI/halte riil + hitung ulang CAI/TDI/Equity dengan bobot final `konfigurasi_bobot`.
+- [ ] **Fase 6 — deployment**: deploy Vercel Pro, subdomain MAPID + CNAME, uji akses eksternal, rekam video demo — semua perlu untuk submission WebGIS **13 Sep**.
+
+### Bukan gap (sudah diverifikasi 1 Sep)
+RLS aktif di 10/10 tabel (termasuk `rute_transit_eksisting` di migration 013) · MapLibre + Claude Haiku 4.5 + basemap MAPID sesuai Bab 9 · isochrone = buffer radius 400/800 m sesuai Bab 7.2 + catatan out-of-scope · `simulate_new_stop` < 3 dtk & klik CAI < 2 dtk sudah diukur.
+
+---
+
 ## Fase 0 — Sebelum baris kode pertama
 
 - [x] ~~Putuskan: MapLibre GL JS atau Leaflet~~ → **MapLibre GL JS** (selesai 24 Agu)
