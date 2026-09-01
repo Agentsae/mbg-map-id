@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Sparkles, Send, Loader2, AlertTriangle } from 'lucide-react'
+import { Sparkles, Send, Loader2, AlertTriangle, Info } from 'lucide-react'
 import { supabase, isConfigured } from '../../lib/supabaseClient'
 import { KECAMATAN_KOTA_BEKASI } from '../../lib/kecamatan'
 
@@ -63,6 +63,12 @@ export default function AIPanel() {
           // "setiap skor harus bisa ditelusuri" (CLAUDE.md).
           flagged: Boolean(result.narasi_flagged),
           flaggedReason: result.flagged_reason,
+          // narasi_source: 'template' -> narasi disusun Edge Function dari
+          // template deterministik (skor model spasial) karena layanan AI tidak
+          // tersedia. Angka & ranking tetap valid; tampilkan catatan netral,
+          // BUKAN peringatan halusinasi seperti `flagged`.
+          templateNarasi: result.narasi_source === 'template',
+          narasiNote: result.narasi_note,
         },
       ])
     } catch (err) {
@@ -109,6 +115,20 @@ export default function AIPanel() {
                   : 'bg-slate-100 text-slate-800')
               }
             >
+              {m.role === 'ai' && !m.flagged && m.templateNarasi && (
+                <div className="mb-2 flex items-start gap-1.5 rounded-md border border-slate-300 bg-slate-50 px-2 py-1.5 text-left text-slate-600">
+                  <Info size={14} className="mt-0.5 shrink-0" />
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-wide">
+                      Narasi template
+                    </p>
+                    <p className="text-xs mt-0.5">
+                      {m.narasiNote ||
+                        'Layanan AI sedang tidak tersedia — narasi ini disusun otomatis dari skor model spasial. Angka & ranking tetap akurat.'}
+                    </p>
+                  </div>
+                </div>
+              )}
               {m.role === 'ai' && m.flagged && (
                 <div className="mb-2 flex items-start gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-2 py-1.5 text-left text-amber-800">
                   <AlertTriangle size={14} className="mt-0.5 shrink-0" />

@@ -26,7 +26,101 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 // butuh kualitas interpretasi yang lebih dalam (trade-off: lebih lambat).
 const MODEL = "claude-haiku-4-5-20251001";
 
+// CORS — WAJIB. Frontend memanggil fungsi ini dari browser (Vercel/localhost)
+// lewat supabase-js `functions.invoke`, yang selalu memicu preflight OPTIONS.
+// Tanpa header ini, browser memblokir request dan supabase-js melempar
+// "Failed to send a request to the Edge Function" (bukan error HTTP dari kode
+// di bawah — request-nya memang tidak pernah sampai). "*" aman di sini karena
+// fungsi tidak membaca cookie dan tidak mengembalikan data sensitif per-user.
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type",
+};
+
+// Semua response HARUS lewat sini supaya header CORS tidak pernah kelupaan di
+// salah satu jalur return (early 400, 500, sukses, dsb).
+// deno-lint-ignore no-explicit-any
+function jsonResponse(body: any, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+}
+
+// Format skor 0-1 -> string 2 desimal dengan koma (konvensi Bahasa Indonesia),
+// dipakai narasi template supaya konsisten dengan aturan format di systemPrompt.
+function fmtSkor(n: unknown): string {
+  const v = Number(n);
+  return Number.isFinite(v) ? v.toFixed(2).replace(".", ",") : "-";
+}
+
+// Narasi FALLBACK deterministik (tanpa LLM) — dipakai kalau Claude API tidak
+// tersedia (ANTHROPIC_API_KEY belum diset, kredit habis, atau API error).
+// PRD final Bab 12 (Risiko & Mitigasi) menjanjikan panel AI tetap menampilkan
+// interpretasi berbasis skor model spasial meski layanan AI mati. Angka di sini
+// diambil apa adanya dari skor yang sudah dihitung offline — tidak ada angka
+// yang dikarang — jadi tidak perlu lewat validasi anti-halusinasi.
+// Struktur mengikuti kerangka CCIA (Condition -> Cause -> Impact -> Action),
+// sama seperti yang diminta ke Claude di systemPrompt.
+// deno-lint-ignore no-explicit-any
+function buildTemplateNarasi(
+  data: any[],
+  ctx: { hasAreaFilter: boolean; areaFilterRaw: string; areaFilterMatched: boolean }
+): string {
+  if (!data || data.length === 0) return "Data skor belum tersedia.";
+
+  const cakupan =
+    ctx.hasAreaFilter && ctx.areaFilterMatched
+      ? `Kecamatan ${ctx.areaFilterRaw}`
+      : "Kota Bekasi";
+
+  const top = data[0];
+  const namaTop = [top.kelurahan, top.kecamatan].filter(Boolean).join(", ") || "(tanpa nama)";
+
+  const daftar = data
+    .map((d, i) => {
+      const nama = d.kelurahan ?? "(tanpa nama)";
+      const kec = d.kecamatan ? ` (${d.kecamatan})` : "";
+      return `${i + 1}. ${nama}${kec} — skor ketimpangan ${fmtSkor(d.skor_ketimpangan)}`;
+    })
+    .join("; ");
+
+  // Condition — kondisi terukur dari Transit Equity Index
+  const condition =
+    `Berdasarkan Transit Equity Index untuk ${cakupan}, ${namaTop} menempati peringkat 1 ` +
+    `dengan skor ketimpangan ${fmtSkor(top.skor_ketimpangan)} (makin tinggi skor = makin ` +
+    `tertinggal akses transitnya). Kelurahan dengan ketimpangan tertinggi: ${daftar}.`;
+
+  // Cause — asal skor + kelompok terdampak (tanpa mengarang kalau null)
+  const kelompok = top.kelompok_terdampak
+    ? `Kelompok yang paling terdampak di ${top.kelurahan}: ${top.kelompok_terdampak}.`
+    : `Analisis kerentanan sosial rinci untuk ${top.kelurahan} belum tersedia dan perlu ditindaklanjuti tim.`;
+  const cause =
+    `Skor ini dibentuk dari Composite Accessibility Index yang di-inverse lalu dipadukan ` +
+    `dengan dimensi kerentanan sosial per kelurahan (usia rentan, akses pendidikan/kesehatan/kerja). ${kelompok}`;
+
+  // Impact — konsekuensi kalau dibiarkan
+  const impact =
+    `Tanpa intervensi, kesenjangan akses transit di kelurahan-kelurahan ini berpotensi ` +
+    `terus melebar dibanding wilayah lain di ${cakupan}.`;
+
+  // Action — rekomendasi (pakai yang sudah dirumuskan tim, jangan dikarang)
+  const action = top.rekomendasi_intervensi
+    ? `Rekomendasi intervensi untuk ${top.kelurahan}: ${top.rekomendasi_intervensi}`
+    : `Rekomendasi intervensi spesifik untuk ${top.kelurahan} belum dirumuskan tim — ` +
+      `prioritaskan kajian lapangan lanjutan untuk kelurahan berperingkat teratas di atas.`;
+
+  return [condition, cause, impact, action].join(" ");
+}
+
 Deno.serve(async (req) => {
+  // Preflight CORS — balas sebelum menyentuh body/logika apa pun.
+  if (req.method === "OPTIONS") {
+    return new Response(null, { status: 204, headers: corsHeaders });
+  }
+
   // Parse body terpisah dari try/catch utama: JSON body yang rusak adalah
   // kesalahan KLIEN (bad request), bukan kegagalan server — harus balas 400,
   // bukan 500 seperti error internal lain di bawah (Supabase/Claude API).
@@ -39,19 +133,16 @@ Deno.serve(async (req) => {
     query = body?.query;
     area_filter = body?.area_filter;
   } catch (_parseErr) {
-    return new Response(
-      JSON.stringify({ error: "Body request bukan JSON yang valid" }),
-      { status: 400, headers: { "Content-Type": "application/json" } }
-    );
+    return jsonResponse({ error: "Body request bukan JSON yang valid" }, 400);
   }
 
   try {
     if (!query) {
-      return new Response(JSON.stringify({ error: "Field 'query' wajib diisi" }), { status: 400 });
+      return jsonResponse({ error: "Field 'query' wajib diisi" }, 400);
     }
-    if (!ANTHROPIC_API_KEY) {
-      return new Response(JSON.stringify({ error: "ANTHROPIC_API_KEY belum diset sebagai secret" }), { status: 500 });
-    }
+    // ANTHROPIC_API_KEY yang kosong BUKAN lagi error fatal — di bawah kita
+    // fallback ke narasi template deterministik (PRD final Bab 12). Panel AI
+    // harus tetap bisa didemokan ke juri walau kredit Anthropic belum aktif.
 
     const supabase = createClient(SUPABASE_URL!, SUPABASE_SERVICE_ROLE_KEY!);
 
@@ -148,21 +239,20 @@ Deno.serve(async (req) => {
     }
 
     if (!skorRows || skorRows.length === 0) {
-      return new Response(
-        JSON.stringify({
-          narasi: "Data skor belum tersedia — jalankan pipeline compute_scores lalu upload ke Supabase terlebih dahulu.",
-          ranking: [],
-          narasi_flagged: false,
-          flagged_reason: null,
-          area_filter: {
-            requested: hasAreaFilter ? areaFilterRaw : null,
-            applied: hasAreaFilter,
-            matched: areaFilterMatched,
-            note: areaFilterNote,
-          },
-        }),
-        { headers: { "Content-Type": "application/json" } }
-      );
+      return jsonResponse({
+        narasi: "Data skor belum tersedia — jalankan pipeline compute_scores lalu upload ke Supabase terlebih dahulu.",
+        ranking: [],
+        narasi_flagged: false,
+        flagged_reason: null,
+        narasi_source: "template",
+        narasi_note: null,
+        area_filter: {
+          requested: hasAreaFilter ? areaFilterRaw : null,
+          applied: hasAreaFilter,
+          matched: areaFilterMatched,
+          note: areaFilterNote,
+        },
+      });
     }
 
     // NOTE field internal (bukan skema DB): key dikirim ke Claude sebagai
@@ -204,38 +294,66 @@ skornya, lalu nyatakan eksplisit bahwa analisis kerentanan/rekomendasi detail un
 kelurahan itu belum tersedia dan perlu tindak lanjut tim.
 Jawab dalam Bahasa Indonesia, maksimal 4 kalimat.`;
 
-    // Claude Messages API — lihat https://docs.claude.com/en/api/messages
-    const claudeRes = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "x-api-key": ANTHROPIC_API_KEY,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        model: MODEL,
-        max_tokens: 512,
-        system: systemPrompt,
-        messages: [
-          {
-            role: "user",
-            content:
-              `Pertanyaan pengguna: ${query}\n\n` +
-              `Data skor:\n${JSON.stringify(promptData, null, 2)}`,
+    // Narasi: coba Claude API dulu; kalau tidak tersedia (key kosong / kredit
+    // habis / API error) fallback ke narasi template deterministik — panel AI
+    // TIDAK boleh mati total, cuma turun kualitas bahasa (PRD final Bab 12).
+    let narasi: string;
+    let narasiSource: "ai" | "template" = "ai";
+    let narasiNote: string | null = null;
+
+    if (!ANTHROPIC_API_KEY) {
+      narasi = buildTemplateNarasi(promptData, { hasAreaFilter, areaFilterRaw, areaFilterMatched });
+      narasiSource = "template";
+      narasiNote =
+        "ANTHROPIC_API_KEY belum diset — narasi disusun dari template deterministik " +
+        "berbasis skor model spasial. Angka & ranking tetap akurat.";
+    } else {
+      try {
+        // Claude Messages API — lihat https://docs.claude.com/en/api/messages
+        const claudeRes = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "x-api-key": ANTHROPIC_API_KEY,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
           },
-        ],
-      }),
-    });
+          body: JSON.stringify({
+            model: MODEL,
+            max_tokens: 512,
+            system: systemPrompt,
+            messages: [
+              {
+                role: "user",
+                content:
+                  `Pertanyaan pengguna: ${query}\n\n` +
+                  `Data skor:\n${JSON.stringify(promptData, null, 2)}`,
+              },
+            ],
+          }),
+        });
 
-    if (!claudeRes.ok) {
-      const errText = await claudeRes.text();
-      throw new Error(`Claude API error: ${claudeRes.status} ${errText}`);
+        if (!claudeRes.ok) {
+          const errText = await claudeRes.text();
+          throw new Error(`Claude API error: ${claudeRes.status} ${errText}`);
+        }
+
+        const claudeJson = await claudeRes.json();
+        // Messages API mengembalikan content sebagai array block, ambil block bertipe "text"
+        narasi =
+          claudeJson.content?.find((b: any) => b.type === "text")?.text ?? "(tidak ada respons)";
+      } catch (aiErr) {
+        // JANGAN throw ke catch utama (itu balas HTTP 500 & panel AI kosong).
+        // Fallback ke template, tetap balas 200 dengan ranking + narasi template.
+        const aiMsg = aiErr instanceof Error ? aiErr.message : String(aiErr);
+        console.warn(`[ai-insight] Claude gagal, fallback ke narasi template: ${aiMsg}`);
+        narasi = buildTemplateNarasi(promptData, { hasAreaFilter, areaFilterRaw, areaFilterMatched });
+        narasiSource = "template";
+        narasiNote =
+          "Layanan AI sedang tidak tersedia — narasi disusun dari template deterministik " +
+          "berbasis skor model spasial. Angka & ranking tetap akurat; bahasa interpretasinya " +
+          "lebih ringkas dari biasanya.";
+      }
     }
-
-    const claudeJson = await claudeRes.json();
-    // Messages API mengembalikan content sebagai array block, ambil block bertipe "text"
-    const narasi =
-      claudeJson.content?.find((b: any) => b.type === "text")?.text ?? "(tidak ada respons)";
 
     // 2. Validasi anti-halusinasi: setiap angka desimal yang disebut narasi harus
     //    cocok dengan salah satu skor_equity asli yang dikirim ke Claude.
@@ -267,56 +385,66 @@ Jawab dalam Bahasa Indonesia, maksimal 4 kalimat.`;
       });
     }
 
-    const skorAsli = promptData
-      .map((d) => Number(d.skor_ketimpangan))
-      .filter((n) => Number.isFinite(n));
-    const angkaDiNarasi = extractDecimalNumbers(narasi);
-    const angkaTidakCocok = angkaDiNarasi.filter((n) => !cocokDenganSkorAsli(n, skorAsli));
+    // Validasi ini hanya relevan untuk narasi buatan LLM. Narasi template
+    // menyusun angkanya langsung dari promptData lewat fmtSkor() — tidak mungkin
+    // mengarang angka — jadi otomatis tidak di-flag.
+    let narasiFlagged = false;
+    let flaggedReason: string | null = null;
 
-    const narasiFlagged = angkaTidakCocok.length > 0;
-    const flaggedReason = narasiFlagged
-      ? `Narasi AI menyebut angka (${angkaTidakCocok.join(", ")}) yang tidak cocok dengan ` +
-        `skor asli manapun dari database (toleransi pembulatan 1-2 desimal). Perlu ditinjau ` +
-        `manual sebelum dipercaya sepenuhnya.`
-      : null;
+    if (narasiSource === "ai") {
+      const skorAsli = promptData
+        .map((d) => Number(d.skor_ketimpangan))
+        .filter((n) => Number.isFinite(n));
+      const angkaDiNarasi = extractDecimalNumbers(narasi);
+      const angkaTidakCocok = angkaDiNarasi.filter((n) => !cocokDenganSkorAsli(n, skorAsli));
 
-    if (narasiFlagged) {
-      console.warn(`[ai-insight] narasi_flagged=true — angka tidak cocok: ${angkaTidakCocok.join(", ")}`);
+      narasiFlagged = angkaTidakCocok.length > 0;
+      flaggedReason = narasiFlagged
+        ? `Narasi AI menyebut angka (${angkaTidakCocok.join(", ")}) yang tidak cocok dengan ` +
+          `skor asli manapun dari database (toleransi pembulatan 1-2 desimal). Perlu ditinjau ` +
+          `manual sebelum dipercaya sepenuhnya.`
+        : null;
+
+      if (narasiFlagged) {
+        console.warn(`[ai-insight] narasi_flagged=true — angka tidak cocok: ${angkaTidakCocok.join(", ")}`);
+      }
     }
 
-    return new Response(
-      JSON.stringify({
-        narasi,
-        // NOTE: key response tetap "skor" (bukan skor_equity/skor_ketimpangan) —
-        // kontrak field ini sudah dipakai AIPanel.jsx (r.skor.toFixed(2)), TIDAK
-        // diubah oleh rename internal promptData di atas supaya frontend tidak putus.
-        ranking: promptData.map((d) => ({
-          kelurahan: d.kelurahan,
-          skor: d.skor_ketimpangan,
-          kecamatan: d.kecamatan,
-          kelompok_terdampak: d.kelompok_terdampak,
-          rekomendasi_intervensi: d.rekomendasi_intervensi,
-        })),
-        // Field baru (additive, backward-compatible dengan AIPanel.jsx lama yang hanya
-        // membaca `narasi` & `ranking`) — frontend BOLEH menampilkan peringatan
-        // berdasarkan narasi_flagged, tapi tidak wajib untuk tetap berfungsi.
-        narasi_flagged: narasiFlagged,
-        flagged_reason: flaggedReason,
-        area_filter: {
-          requested: hasAreaFilter ? areaFilterRaw : null,
-          applied: hasAreaFilter,
-          matched: areaFilterMatched,
-          note: areaFilterNote,
-        },
-      }),
-      { headers: { "Content-Type": "application/json" } }
-    );
+    return jsonResponse({
+      narasi,
+      // NOTE: key response tetap "skor" (bukan skor_equity/skor_ketimpangan) —
+      // kontrak field ini sudah dipakai AIPanel.jsx (r.skor.toFixed(2)), TIDAK
+      // diubah oleh rename internal promptData di atas supaya frontend tidak putus.
+      ranking: promptData.map((d) => ({
+        kelurahan: d.kelurahan,
+        skor: d.skor_ketimpangan,
+        kecamatan: d.kecamatan,
+        kelompok_terdampak: d.kelompok_terdampak,
+        rekomendasi_intervensi: d.rekomendasi_intervensi,
+      })),
+      // Field baru (additive, backward-compatible dengan AIPanel.jsx lama yang hanya
+      // membaca `narasi` & `ranking`) — frontend BOLEH menampilkan peringatan
+      // berdasarkan narasi_flagged, tapi tidak wajib untuk tetap berfungsi.
+      narasi_flagged: narasiFlagged,
+      flagged_reason: flaggedReason,
+      // "ai" = narasi dari Claude; "template" = fallback deterministik saat
+      // layanan AI tidak tersedia (PRD final Bab 12). narasi_note berisi
+      // penjelasan singkat untuk ditampilkan frontend saat source = template.
+      narasi_source: narasiSource,
+      narasi_note: narasiNote,
+      area_filter: {
+        requested: hasAreaFilter ? areaFilterRaw : null,
+        applied: hasAreaFilter,
+        matched: areaFilterMatched,
+        note: areaFilterNote,
+      },
+    });
   } catch (err) {
     console.error(err);
     // err bisa berupa Error biasa, atau object error mentah dari Supabase
     // (mis. PostgrestError) — String(err) pada object polos menghasilkan
     // "[object Object]" yang tidak berguna, jadi ambil .message kalau ada.
     const message = err instanceof Error ? err.message : JSON.stringify(err);
-    return new Response(JSON.stringify({ error: message }), { status: 500 });
+    return jsonResponse({ error: message }, 500);
   }
 });
