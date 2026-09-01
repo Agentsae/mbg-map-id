@@ -18,12 +18,12 @@ Checklist ini bukan pengganti PRD — kalau ada perbedaan, PRD (Bab 8, acceptanc
 
 ## Fase 1 — Fondasi frontend (paralel dengan survei, 🟢 semua)
 
-- [x] Layout shell sesuai wireframe resmi (Gambar 3 PRD): sidebar 8 menu (Dashboard, Peta Interaktif, Analisis Spasial, AI Spatial Consultant, Simulasi Skenario, Rekomendasi, Data & Laporan, Pengaturan) — diverifikasi 28 Agu: `App.jsx` sidebar 8 menu persis sesuai wireframe
+- [x] Layout shell sesuai wireframe resmi (Gambar 6 PRD final — Bab 10.2, dulu bernomor Gambar 3 di draft): sidebar 8 menu (Dashboard, Peta Interaktif, Analisis Spasial, AI Spatial Consultant, Simulasi Skenario, Rekomendasi, Data & Laporan, Pengaturan) — diverifikasi 28 Agu: `App.jsx` sidebar 8 menu persis sesuai wireframe
 - [x] Peta dasar tampil dengan basemap MAPID Maps + kontrol layer (zoom, pilih layer, legenda) — diverifikasi 28 Agu (qa-tester): style MAPID `street-2d-building` + tiles + glyph + sprite semua HTTP 200, `MapView.jsx` NavigationControl + layer GeoJSON generik, `MapLegend.jsx` ada
 - [x] Card ringkasan Kota Bekasi (populasi, kepadatan, luas, usia produktif, indeks aksesibilitas rata-rata) — dibangun + diverifikasi 28 Agu (qa-tester 8/8 lulus): section "Ringkasan Kota Bekasi" 5 kartu di `Dashboard.jsx`, sumber kebenaran tunggal `frontend/src/lib/kotaProfil.js` ← `etl/data/demografi/profil_kota_kanonik.json`, diseragamkan ke **DKB Semester I 2026**: 2.607.248 jiwa, 12.387 jiwa/km² (diturunkan = populasi ÷ 210,49), 210,49 km² (luas BPS), usia produktif 15–64 th 70,98% (= 1.850.727 jiwa). Populasi kartu = `SELECT sum(jumlah_penduduk) FROM penduduk` = basis RPC `simulate_new_stop` (anti-drift dikonfirmasi). Jangan reintroduksi angka lama (2.595.927 / 12.333 / 70,99 / "DKB Semester II 2025").
 - [x] Kerangka Dashboard Indikator (coverage ratio, jumlah transit desert, potensi penerima manfaat) dengan data dummy — diverifikasi 28 Agu: `Dashboard.jsx` kartu Transit Desert (1.517 grid `skor_tdi > 0.6`) + Potensi Penerima Manfaat + BarChart coverage per kecamatan, dengan fallback demo
 - [x] Kerangka panel AI Spatial Consultant (chat UI) dengan respons dummy/hardcoded dulu — diverifikasi 25 Agu: `AIPanel.jsx` punya chat UI lengkap (input, riwayat pesan, ranking list) dan fallback `DEMO_RESPONSE` saat Supabase belum tersambung
-- [ ] Kerangka panel Simulasi Skenario (dropdown pilih skenario + tombol "Lihat Hasil Simulasi") sesuai mockup — FUNGSIONAL sudah ada (klik titik di peta → RPC → `SimulationPanel.jsx`), tapi presentasi belum berbentuk dropdown skenario sesuai Gambar 3. Prioritas rendah (acceptance criteria Bab 8 sudah terpenuhi lewat alur klik-peta)
+- [ ] Kerangka panel Simulasi Skenario (dropdown pilih skenario + tombol "Lihat Hasil Simulasi") sesuai mockup — FUNGSIONAL sudah ada (klik titik di peta → RPC → `SimulationPanel.jsx`), tapi presentasi belum berbentuk dropdown skenario sesuai Gambar 6. Prioritas rendah (acceptance criteria Bab 8 sudah terpenuhi lewat alur klik-peta)
 
 ## Fase 2 — Logika inti (🟢 bisa mulai dengan data sintetis)
 
@@ -38,11 +38,12 @@ Checklist ini bukan pengganti PRD — kalau ada perbedaan, PRD (Bab 8, acceptanc
 - [ ] Validasi: pastikan narasi AI tidak menyebut angka yang tidak ada di data asal — **TER-BLOK**: billing Anthropic belum aktif (`ai-insight` → HTTP 500 "credit balance too low"). Uji begitu kredit aktif
 - [ ] Cek kecepatan respons **< 5 detik** — **TER-BLOK** billing Anthropic (sda)
 - [ ] Contoh query dari PRD Lampiran untuk uji: *"Di mana titik prioritas halte baru di Kecamatan Mustika Jaya?"* — **TER-BLOK** billing Anthropic (sda)
+- [ ] 🟢 **Fallback narasi template deterministik (tanpa LLM)** — PRD final Bab 12 (Risiko & Mitigasi) eksplisit menjanjikan ini sebagai mitigasi kalau billing Anthropic tidak aktif ("panel tetap menampilkan interpretasi berbasis skor model spasial meskipun API AI tidak tersedia"). **Diverifikasi 1 Sep: BELUM ADA** — `ai-insight/index.ts` cuma `throw` lalu balas HTTP 500 kalau Claude API gagal (tidak ada branch fallback), dan `AIPanel.jsx` cuma menampilkan `err.message` mentah sebagai pesan error, bukan narasi. `DEMO_RESPONSE` yang ada di `AIPanel.jsx` hanya jalan kalau Supabase belum `isConfigured` — tidak menutup celah ini. Tidak butuh billing aktif untuk dikerjakan (bisa mulai sekarang), dan ini satu-satunya cara demo panel AI tetap bisa jalan ke juri kalau kredit Anthropic masih belum aktif saat submission.
 
 ## Fase 4 — Swap ke data asli (🟡 mulai begitu data processing selesai, ~31 Agu–6 Sep)
 
 - [ ] Upload hasil olahan data kependudukan/POI/halte ke tabel Supabase (ganti data sintetis)
-- [ ] Hitung ulang CAI/TDI/Transit Equity Index dengan bobot AHP final (bukan bobot dummy)
+- [ ] Hitung ulang CAI/TDI/Transit Equity Index dengan bobot final `konfigurasi_bobot` (direview mentor 27 Agu — bukan hasil AHP pairwise formal, lihat CLAUDE.md; bukan bobot dummy)
 - [~] Isi Transit Equity Index Dashboard dengan ranking 5+ kelurahan asli beserta rekomendasi intervensi (ranking 1 = `skor_final` TERTINGGI = kelurahan paling tertinggal/butuh intervensi — lihat catatan arah skala di CLAUDE.md bagian Struktur Data, jangan urutkan terbalik) — ranking 56 kelurahan + skor + rincian kriteria SUDAH ADA & arah skala benar (Arenjaya #1). `kelompok_terdampak` + `rekomendasi_intervensi` sebelumnya NULL semua → migration `014_equity_kelompok_rekomendasi_isi.sql` dibuat 28 Agu (deterministik dari dimensi kerentanan, ditelusuri), **menunggu review + `db push`**
 - [ ] Re-validasi acceptance criteria kecepatan dengan volume data asli (bisa beda dari data dummy yang lebih kecil)
 
