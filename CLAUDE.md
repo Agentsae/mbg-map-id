@@ -1,8 +1,11 @@
 # GeoTransit Insight — Konteks Proyek untuk Claude Code
 
-> Sumber kebenaran: `PRD_GeoTransitInsight.docx` (versi terbaru, submission 13 Sep 2026).
+> Sumber kebenaran: `docs/MBG_PRD_GeoTransitInsight.pdf` — PRD **final**, submission PRD sudah
+> dikumpulkan **30 Agustus 2026** (terpisah dari submission WebGIS 13 September 2026 — lihat
+> Jalur Kritis di bawah). PDF ini 114 halaman tapi Bab 1–14 inti cuma di halaman 1–22; sisanya
+> (hal. 23–114) lampiran screenshot dokumentasi Survey Activities, bukan bagian spesifikasi.
 > File ini adalah ringkasan teknis dari PRD tersebut, dibuat supaya tiap sesi Claude Code
-> punya konteks yang sama tanpa perlu membaca ulang dokumen Word 1000+ baris.
+> punya konteks yang sama tanpa perlu membaca ulang dokumen PDF itu.
 > **Kalau PRD di-update, update juga file ini.**
 
 ## Stack sudah final (dikunci 24 Agustus 2026)
@@ -39,8 +42,17 @@ Prinsip inti yang TIDAK BOLEH dilanggar saat implementasi:
 
 ## Struktur Data / Metodologi (jangan diubah tanpa alasan kuat)
 
-- **Composite Accessibility Index (CAI)** — Weighted Linear Combination dari: kepadatan penduduk, jarak ke fasilitas umum (inverse), volume penumpang transit terdekat, skor survei lapangan. Bobot ditentukan lewat AHP bersama mentor.
-- **Transit Desert Index (TDI)** — per grid 250–500m (dasymetric mapping), rasio kebutuhan mobilitas terhadap skor aksesibilitas transit.
+- **Composite Accessibility Index (CAI)** — Weighted Linear Combination dari 4 kriteria, tiap kriteria dinormalisasi 0–1 sebelum dikalikan bobot (supaya kontribusi per kriteria bisa ditelusuri per lokasi saat diklik — PRD final Bab 7.3):
+
+  | Kriteria | Arah | Bobot | Sumber data |
+  |---|---|---|---|
+  | Kepadatan penduduk | makin tinggi → prioritas naik | 0,35 | DKB Semester I 2026, grid 300 m (dasymetric) |
+  | Jarak ke fasilitas umum (inverse) | makin dekat → skor naik | 0,25 | POI OSM/Menu Go, `ST_Distance` |
+  | Volume penumpang transit terdekat | makin tinggi → skor naik | 0,25 | Data penumpang KRL (KAI Commuter)/BisKita per radius |
+  | Skor survei lapangan (kondisi fisik & akses simpul) | — | 0,15 | 31 titik Survey Activities + instrumen survei (0–1) |
+
+  Bobot di atas sudah ada di tabel `konfigurasi_bobot` (`nama_index='CAI'`, migration `004_konfigurasi_bobot.sql`) — itu **rujukan tunggal** untuk perhitungan skor, bukan angka di dokumen ini. **Koreksi soal metodologi bobot:** ini BUKAN hasil AHP pairwise-comparison Saaty formal (tidak pernah ada matriks pairwise dihitung, makanya `consistency_ratio` sengaja NULL) — mentor hanya me-review worksheet bobot ini secara informal (cek distribusi hasil & kesesuaian objektif analisis) dan approve 27 Agustus 2026 (lihat `009_bobot_tdi_equity_mentor_review.sql`, `docs/VALIDASI_BOBOT_AHP.md`). Jangan sebut ini "hasil AHP" di narasi AI atau laporan — sebut "bobot direview mentor", bukan "divalidasi lewat AHP formal".
+- **Transit Desert Index (TDI)** — per grid **300 m** (dasymetric mapping; PRD final Bab 3.1/7.1 — sudah sama persis dengan implementasi `etl/build_fishnet_grid.py` `DEFAULT_CELL_SIZE_M = 300`, meski beberapa komentar lama di kode & CLAUDE.md draft sebelumnya masih menyebut rentang "250–500m", itu usang). Formula (PRD final Bab 7.2): `TDI = (Kepadatan Penduduk × Indeks Kebutuhan Mobilitas) ÷ Skor Aksesibilitas Transit`. Indeks Kebutuhan Mobilitas didekati dari proksi: proporsi lansia/difabel, kepadatan POI kebutuhan harian, rasio rumah tangga tanpa kendaraan pribadi (kalau data tersedia) — bobot 3 komponen ini ada di `konfigurasi_bobot` (`nama_index='TDI_MOBILITAS'`).
 - **Transit Equity Index** — CAI + dimensi kerentanan sosial (usia rentan, akses pendidikan/kesehatan/kerja) per kelurahan. Ranking ketimpangan, bukan ranking prioritas lokasi.
   **PENTING (arah skala, jangan sampai terbalik):** kolom `skor_final` pada tabel `skor_equity`
   adalah skor KETIMPANGAN (equity gap), BUKAN skor "seberapa equitable" dalam arti tinggi=bagus.
@@ -52,7 +64,8 @@ Prinsip inti yang TIDAK BOLEH dilanggar saat implementasi:
   dirugikan" di UI — pertahankan konvensi ini di narasi AI, dokumen, dan kode baru mana pun yang
   menyebut istilah ini.
 - Simulasi What-If pakai estimasi jalan kaki (kecepatan 4–5 km/jam), BUKAN network routing riil (eksplisit out-of-scope).
-- **Angka profil Kota Bekasi (kanonik, diseragamkan tim 2026-08-28).** Sumber kebenaran: `etl/data/demografi/profil_kota_kanonik.json`, dari **DKB Semester I 2026** (Dinas Dukcapil Kota Bekasi): **2.607.248 jiwa / 12.387 jiwa/km² / 210,49 km²** (luas BPS Kota Bekasi Dalam Angka) / **usia produktif 15–64 th 70,98%** (= 1.850.727 jiwa). Populasi kanonik = Σ `penduduk.jumlah_penduduk` di database. JANGAN reintroduksi angka lama `2.595.927`, `12.333`, `70,99`, atau sumber "DKB Semester II 2025" di kode, dokumen, maupun narasi AI.
+- **Narasi AI Spatial Consultant mengikuti kerangka CCIA** — Condition → Cause → Impact → Action (PRD final Bab 7.5), dipetakan ke fitur: Condition = Peta Multi-Layer Gap Analysis & Dashboard Indikator; Cause = CAI/TDI beserta rincian kriteria; Impact = Simulasi What-If (proyeksi before-after); Action = Transit Equity Index Dashboard (ranking + rekomendasi). Rekomendasi tahap Action harus **SMART Spasial** (Specific, Measurable, Achievable, Relevant, Time-bound) — bukan observasi umum ("prioritaskan Kecamatan X"), tapi konkret ("bangun 1 halte baru radius 500m dari [lokasi], berpotensi melayani tambahan N jiwa" — N dari hasil simulasi What-If riil, bukan angka karangan AI). Cek `supabase/functions/ai-insight/index.ts` sudah mengikuti struktur ini.
+- **Angka profil Kota Bekasi (kanonik, diseragamkan tim 2026-08-28).** Sumber kebenaran: `etl/data/demografi/profil_kota_kanonik.json`, dari **DKB (Data Konsolidasi Bersih) Semester I 2026 — Ditjen Dukcapil Kemendagri** (bukan "Dinas Dukcapil Kota Bekasi"; PRD final Bab 1.1 menyebutnya instansi pusat, bukan dinas kota): **2.607.248 jiwa / 12.387 jiwa/km² / 210,49 km²** (luas BPS Kota Bekasi Dalam Angka) / **usia produktif 15–64 th 70,98%** (= 1.850.727 jiwa). Populasi kanonik = Σ `penduduk.jumlah_penduduk` di database. JANGAN reintroduksi angka lama `2.595.927`, `12.333`, `70,99`, atau sumber "DKB Semester II 2025" di kode, dokumen, maupun narasi AI.
 
 ## Fitur & Acceptance Criteria (sumber: PRD Bab 8 — pakai ini sebagai definition of done)
 
@@ -62,7 +75,7 @@ Prinsip inti yang TIDAK BOLEH dilanggar saat implementasi:
 | Composite Accessibility Index & TDI | Klik lokasi di peta → tampilkan skor + **rincian kontribusi tiap kriteria** (bukan angka tunggal tanpa penjelasan). |
 | AI Spatial Consultant | Respons pertanyaan bahasa natural **< 5 detik**, pakai ringkasan data hasil model spasial — bukan raw coordinates dikirim ke LLM. |
 | Simulasi "What-If" | Klik titik di peta → proyeksi penduduk tambahan terlayani + estimasi waktu tempuh jalan kaki, **< 3 detik**. |
-| Transit Equity Index Dashboard | Ranking minimal **5 kelurahan** dengan kondisi aksesibilitas transit **paling timpang/tertinggal** (frasa PRD "skor equity terendah" = kondisi paling tidak equitable — di database ini berarti `skor_final` TERTINGGI pada tabel `skor_equity`, ranking = 1; lihat catatan arah skala di bagian Struktur Data di atas) + kelompok terdampak + 1 rekomendasi intervensi per kelurahan. |
+| Transit Equity Index Dashboard | Ranking minimal **5 kelurahan** dengan skor ketimpangan **tertinggi** (= kondisi akses transit paling timpang/tertinggal, ranking 1 = paling butuh intervensi — PRD final Bab 8.2 sudah menyatakan ini eksplisit dengan arah skala yang sama, konsisten dengan `skor_final` TERTINGGI pada tabel `skor_equity`; lihat catatan arah skala di bagian Struktur Data di atas) + kelompok terdampak + 1 rekomendasi intervensi per kelurahan. |
 | Dashboard Indikator | Coverage ratio, jumlah transit desert teridentifikasi, potensi penerima manfaat — dari data yang sudah divalidasi. |
 | Export Report | Unduh ringkasan (peta + indikator kunci) sebagai PDF atau gambar. |
 
@@ -75,23 +88,35 @@ Prinsip inti yang TIDAK BOLEH dilanggar saat implementasi:
 - Aplikasi mobile native
 - Integrasi ticketing/pembayaran
 - Sistem manajemen user multi-role enterprise
+- Integrasi data real-time dari sensor, CCTV, atau sistem pihak ketiga di luar MAPID API
 
 ## Referensi Visual
 
-Wireframe/mockup dashboard resmi ada di lampiran PRD (Gambar 3) — sidebar nav: Dashboard, Peta Interaktif, Analisis Spasial, AI Spatial Consultant, Simulasi Skenario, Rekomendasi, Data & Laporan, Pengaturan. Dashboard utama berisi: ringkasan Kota Bekasi (populasi, kepadatan, luas, usia produktif, indeks aksesibilitas rata-rata), kartu Transit Desert count, kartu Usulan Halte Prioritas, kartu Potensi Penerima Manfaat, Top 3 Rekomendasi AI (skor dampak, potensi manfaat, estimasi biaya), dan panel Simulasi Skenario dengan dropdown pilihan skenario.
+Wireframe/mockup dashboard resmi ada di lampiran PRD (**Gambar 6**, Bab 10.2 — PRD final menomori ulang gambar; draft lama sempat menyebutnya Gambar 3, itu usang) — sidebar nav: Dashboard, Peta Interaktif, Analisis Spasial, AI Spatial Consultant, Simulasi Skenario, Rekomendasi, Data & Laporan, Pengaturan. Dashboard utama berisi: ringkasan Kota Bekasi (populasi, kepadatan, luas, usia produktif, indeks aksesibilitas rata-rata), kartu Transit Desert count, kartu Usulan Halte Prioritas, kartu Potensi Penerima Manfaat, Top 3 Rekomendasi AI (skor dampak, potensi manfaat, estimasi biaya), dan panel Simulasi Skenario dengan dropdown pilihan skenario.
+
+**Catatan aksesibilitas warna (PRD final Bab 10.3, temuan Coaching Clinic 4):** skema merah–oranye–hijau di mockup untuk indeks aksesibilitas berisiko tidak terbaca bagi pengguna color vision deficiency (~8% populasi pria). Ganti ke palet sequential colorblind-safe (mis. Viridis/ColorBrewer) + tambahkan pembeda non-warna (label angka/pola) di legenda — jangan bergantung penuh pada warna.
 
 ## Jalur Kritis (lihat docs/BUILD_CHECKLIST.md untuk urutan tugas)
 
-Hari ini: 24 Agustus 2026. Submission: **13 September 2026**.
+PRD final sudah dikumpulkan **30 Agustus 2026** (deadline resmi, terpisah dari submission WebGIS). Sisa jalur kritis (PRD final Bab 11.2):
 
 ```
-29-30 Agu  Field Day 3 survei (terakhir, 70 titik total)
-31 Agu-6 Sep  Data processing (CAI, TDI, Equity Index dihitung)
-7-12 Sep   Development inti + AI + simulasi + deployment  ← HANYA 6 HARI, PALING BERISIKO
-13 Sep     Submission final
+31 Agu-6 Sep  Data processing & analisis spasial (CAI, TDI, Equity Index dihitung
+              dari 31 titik Survey Activities final + 3 submission Struk Go)
+7-12 Sep      Development inti + integrasi AI + Biweekly Mentoring 2
+              (deadline dev 12 Sep)  ← PALING BERISIKO
+13 Sep        Submission WebGIS (video recording, code, link) — TERPISAH dari
+              submission PRD yang sudah lewat
+14-18 Sep     Penjurian Grand Final Selection, pengumuman Top 10 (18 Sep)
+20-24 Sep     Kondisional kalau lolos Top 10 (Coaching Clinic 6, Final Rehearsal,
+              MAPID Catalyst Day 1-2)
 ```
 
-**Strategi wajib:** bangun seluruh fitur dengan data sintetis/dummy MULAI SEKARANG, jangan tunggu 31 Agustus. Setiap komponen yang butuh data (peta, dashboard, AI panel) harus punya fallback ke data contoh kalau tabel Supabase masih kosong — supaya swap ke data asli nanti tinggal ganti sumber, bukan bangun dari nol di jendela 6 hari yang sempit.
+**Total data survei final (PRD final Bab 6.1 — koreksi dari draft lama yang sempat menyebut "70 titik"): 31 titik Survey Activities + 3 submission Struk Go.** Data ini diposisikan sebagai ground truth/validasi lapangan, BUKAN sampel statistik yang merepresentasikan seluruh Kota Bekasi — jangan generalisasi di narasi AI atau laporan.
+
+⚠️ **Konflik tanggal Field Day di dalam PRD final sendiri, belum diselaraskan tim — jangan asal pilih salah satu tanpa konfirmasi ke tim:** tabel Jadwal Pelaksanaan (Bab 6.5) mencantumkan Field Day 1/2/3 sama-sama tanggal "17 Agustus 2026", sementara Timeline Internal Tim MBG (Bab 11.2) memisahkannya jadi Field Day 1 = 17 Agu, Field Day 2 = 22–23 Agu, Field Day 3 = 29 Agu. Total 31 titik yang dilaporkan tidak berubah oleh perbedaan ini, hanya kronologinya yang ambigu.
+
+**Strategi wajib:** bangun seluruh fitur dengan data sintetis/dummy. Setiap komponen yang butuh data (peta, dashboard, AI panel) harus punya fallback ke data contoh kalau tabel Supabase masih kosong — supaya swap ke data asli tinggal ganti sumber, bukan bangun dari nol di jendela development yang sempit (7–12 Sep).
 
 ## Subagents — pembagian kerja 5 peran PRD lewat Claude Code
 
