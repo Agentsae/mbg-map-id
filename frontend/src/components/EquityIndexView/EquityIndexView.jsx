@@ -155,7 +155,7 @@ export default function EquityIndexView() {
         </div>
       )}
 
-      <div className="p-4 space-y-3 overflow-y-auto">
+      <div className="flex-1 min-h-0 p-4 space-y-3 overflow-y-auto">
         <p className="text-sm text-slate-500 mb-1">
           Ranking ketimpangan akses transportasi antarkelurahan — skor lebih tinggi = lebih dirugikan.
           Klik kelurahan untuk lihat rincian kontribusi tiap kriteria.
