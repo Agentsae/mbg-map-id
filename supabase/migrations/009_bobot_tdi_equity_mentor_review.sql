@@ -32,6 +32,13 @@
 -- Idempotent: pakai INSERT ... WHERE NOT EXISTS per (nama_index,
 -- nama_kriteria), aman dijalankan berulang (db push berikutnya) tanpa
 -- membuat duplikat.
+--
+-- SUPERSEDED 2026-09-03: bobot & status metodologi di file ini sudah
+-- digantikan oleh 018_konfigurasi_bobot_ahp_final.sql — sesi AHP pairwise
+-- Saaty FORMAL (CR: CAI 0,0226 / TDI_MOBILITAS 0,0000 / EQUITY 0,0457,
+-- semua < 0,1). Uraian "bukan pairwise formal / consistency_ratio sengaja
+-- NULL" di header ini hanya berlaku untuk periode 27 Agu–2 Sep 2026.
+-- Lihat migration 018 + docs/VALIDASI_BOBOT_AHP.md Bagian 0.
 -- ============================================================
 
 insert into konfigurasi_bobot (nama_index, nama_kriteria, bobot, consistency_ratio, catatan)

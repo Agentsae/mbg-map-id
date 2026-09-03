@@ -1,90 +1,50 @@
 -- ============================================================
--- GeoTransit Insight — 014_equity_kelompok_rekomendasi_isi.sql
+-- GeoTransit Insight — 019_equity_kelompok_rekomendasi_refill_ahp.sql
 --
--- Mengisi kolom skor_equity.kelompok_terdampak (text[]) dan
--- skor_equity.rekomendasi_intervensi (text) untuk 56 baris REAL
--- (sumber LIKE 'REAL - %') yang selama ini NULL — temuan QA 2026-08-28.
+-- KENAPA MIGRATION INI ADA:
+-- Setelah bobot AHP pairwise final (018_konfigurasi_bobot_ahp_final.sql,
+-- 2026-09-03) seluruh skor dihitung ulang. Untuk skor_equity, pipeline
+-- etl/aggregate_equity_kelurahan.py (upload_equity_scores_real) melakukan
+-- DELETE + INSERT 56 baris REAL, dan pada INSERT itu kolom naratif
+-- kelompok_terdampak + rekomendasi_intervensi SENGAJA di-set NULL (bukan
+-- keluaran formula — lihat docstring modul itu). Akibatnya isi yang
+-- ditanam 014_equity_kelompok_rekomendasi_isi.sql hilang dari 56 baris
+-- baru. Migration ini MENGISI ULANG kolom itu.
 --
--- Konteks acceptance criteria (PRD Bab 8, Transit Equity Index Dashboard):
---   "ranking minimal 5 kelurahan ... + kelompok terdampak + 1 rekomendasi
---    intervensi per kelurahan".
--- Kolom ditambahkan di 005_equity_kelompok_rekomendasi.sql, tetapi
--- aggregate_equity_kelurahan.upload_equity_scores_real() sengaja meng-insert
--- NULL (lihat docstring modul itu) karena narasi ini BUKAN keluaran formula.
--- Migration inilah yang mengisinya — SEKALI, deterministik, bisa ditelusuri.
+-- PERUBAHAN NILAI vs 014 (recompute bobot AHP; dicek baris per baris):
+--   * Arah skala, ranking 1 = paling dirugikan, #56 = kondisi paling baik:
+--     TIDAK berubah. Setelah recompute, ranking 1 TETAP Arenjaya dan
+--     ranking 56 TETAP Margamulya (Spearman rho ranking lama vs baru =
+--     0,98; mean |Δrank| = 1,9; mover terbesar Bantargebang #18->#31).
+--   * Nilai n_* per dimensi kerentanan (kepadatan, usia_rentan,
+--     akses_pendidikan/kesehatan/kerja) TIDAK berubah oleh pergantian
+--     bobot — normalisasi min-max tiap dimensi independen dari bobot —
+--     jadi seluruh penetapan kelompok_terdampak + klaim "dimensi terlemah"
+--     di teks 014 TETAP VALID dan disalin apa adanya di sini.
+--   * SATU koreksi angka: #56 Margamulya. Teks 014 menyebut "CAI 0,83";
+--     skor_cai_rata2 Margamulya hasil recompute = 0,8574 (~0,86, dari 1
+--     titik kandidat KND-003 "Akses Masuk Stasiun Bekasi"). Diperbarui ke
+--     "CAI 0,86" supaya angka di narasi bisa ditelusuri ke skor_cai live.
+--   * Tidak ada kelurahan yang intensitas rekomendasinya jadi keliru:
+--     satu-satunya rekomendasi "pertahankan (jangan bangun baru)" ada di
+--     #56 Margamulya yang tetap peringkat terbawah; #1..#55 tetap
+--     rekomendasi "bangun/perluas layanan" dan semuanya masih di paruh
+--     yang relevan untuk intervensi aktif.
 --
--- ------------------------------------------------------------
--- PRINSIP CLAUDE.md: setiap output harus bisa ditelusuri.
--- kelompok_terdampak TIDAK dikarang bebas — diturunkan deterministik dari
--- kolom komponen ternormalisasi yang SUDAH ada di tabel skor_equity
--- (hasil etl/compute_scores.py compute_equity_index()).
+-- Komentar "#N" di tiap statement = snapshot ranking LAMA (sejak 014,
+-- 2026-08-29). Sudah stale sebelum migration ini (mis. Durenjaya ditandai
+-- #2 padahal sejak lama #11-#12) dan DIBIARKAN sebagai jejak dokumentasi —
+-- yang mengikat tetap ba.nama_kelurahan, bukan angka itu.
 --
--- Bobot dimensi (konfigurasi_bobot, nama_index='EQUITY'). Bobot yang tercantum
--- di bawah = draft interim review worksheet mentor 2026-08-27.
--- SUPERSEDED 2026-09-03: bobot EQUITY final = hasil AHP pairwise Saaty FORMAL
--- (CR 0,0457 < 0,1), di-set via 018_konfigurasi_bobot_ahp_final.sql —
--- aksesibilitas_inv 0.3076 | kepadatan 0.1538 | usia_rentan 0.1513 |
--- akses_pendidikan 0.1260 | akses_kesehatan 0.1353 | akses_kerja 0.1260.
--- Recompute + refill kolom naratif ini menyusul via
--- 019_equity_kelompok_rekomendasi_refill_ahp.sql. Nilai lama di bawah dibiarkan
--- sebagai jejak historis body migration ini.
---     aksesibilitas_inv 0.30 | usia_rentan 0.20 | kepadatan 0.15
---     akses_pendidikan  0.15 | akses_kesehatan 0.10 | akses_kerja 0.10
+-- IDEMPOTEN / AMAN DI-RERUN: sama seperti 014 — UPDATE ... FROM
+-- batas_administrasi ba di-key ke ba.nama_kelurahan (unik di 56 baris RBI)
+-- dan dibatasi se.sumber LIKE 'REAL - %'. Menjalankan ulang tidak
+-- menambah baris / tidak mengubah nilai lebih lanjut.
 --
--- SNAPSHOT NILAI-n: angka n_* di komentar tiap statement di bawah adalah hasil
--- recompute etl/aggregate_equity_kelurahan.py per 2026-08-28. Kalau ETL itu
--- di-rerun dan nilai n_* bergeser, kelompok_terdampak + komentar di file ini
--- bisa jadi stale dan HARUS ditinjau ulang (guard di akhir file hanya menangkap
--- baris NULL, bukan pergeseran nilai).
---
--- ATURAN PEMETAAN kelompok_terdampak (deterministik):
---   1. Hitung kontribusi berbobot tiap dimensi kerentanan ke skor_final:
---        kontribusi_d = bobot_d * n_d   (n_d = kolom n_* di skor_equity)
---   2. Dimensi 'aksesibilitas_inv' DIKECUALIKAN dari penentuan kelompok
---      terdampak: untuk 53 dari 56 baris nilainya konstan 0.8709 (skor_cai_rata2
---      dipakai fallback rata-rata kota — lihat 010_skor_equity_sumber.sql),
---      jadi tidak membedakan antar-kelurahan. Ia tetap kriteria berbobot
---      terbesar pada skor_final (semua 56 kelurahan ini memang berakses
---      transit rendah), hanya saja bukan pembeda kelompok sasaran.
---   3. Dari 5 dimensi tersisa (kepadatan, usia_rentan, akses_pendidikan,
---      akses_kesehatan, akses_kerja): ambil dimensi dengan kontribusi_d
---      TERBESAR (selalu masuk), lalu tambahkan dimensi ke-2/ke-3 HANYA jika
---        kontribusi_d >= 0.5 * kontribusi_terbesar  DAN  n_d >= 0.35
---      (ambang 0.35 = "nilai ternormalisasi benar-benar menonjol", bukan
---      sekadar relatif). Maksimum 3 dimensi per kelurahan.
---   4. Tiap dimensi terpilih dipetakan ke frasa kelompok baku:
---        kepadatan        -> 'penduduk permukiman padat'
---        usia_rentan      -> 'lansia & balita'
---        akses_pendidikan -> 'pelajar & keluarga tanpa sekolah dalam jangkauan jalan kaki'
---        akses_kesehatan  -> 'warga dengan akses faskes terbatas'
---        akses_kerja      -> 'pekerja komuter berpendapatan rendah'
---   Catatan: n_usia_rentan = proporsi lansia+balita APA ADANYA (tidak
---   dinormalisasi min-max), rentang aktual ~0.09-0.15, sehingga praktis tidak
---   pernah lolos ambang 0.35 -> 'lansia & balita' tidak muncul di batch ini.
---   Itu konsisten: usia rentan bukan pembeda antar-kelurahan pada data ini.
---
--- ATURAN rekomendasi_intervensi:
---   Satu tindakan konkret spesifik-lokasi, selaras scope proyek (transit massal:
---   halte/feeder BisKita Trans Patriot, integrasi KRL, angkutan pengumpan ke
---   KRL/LRT Jabodebek), diikat ke dimensi TERLEMAH kelurahan + koridor jalan
---   /simpul transit nyata di kecamatannya. Estimasi jangkauan pakai kecepatan
---   jalan kaki 4-5 km/jam (400 m ~ 5 menit, 800 m ~ 10 menit) — BUKAN network
---   routing (out-of-scope, CLAUDE.md). Mutu naratif diprioritaskan untuk
---   top-10; ranking 11-56 pola lebih ringkas tapi tetap spesifik-dimensi.
---
--- Arah skala (CLAUDE.md, jangan dibalik): skor_final TINGGI = kelurahan makin
--- DIRUGIKAN; ranking 1 = paling butuh intervensi. Rekomendasi ranking teratas
--- karena itu bersifat "bangun/perluas layanan", ranking terbawah "pertahankan".
---
--- IDEMPOTEN: tiap statement UPDATE ... FROM batas_administrasi ba di-key ke
--- ba.nama_kelurahan (unik di 56 baris RBI, dicek: tidak ada duplikat) dan
--- dibatasi se.sumber LIKE 'REAL - %' supaya baris dummy (kalau kelak
--- ditambahkan lagi) tidak tersentuh. Aman dijalankan ulang.
---
--- URUTAN FILE: migration ke-014, setelah 013_rute_transit_eksisting.sql.
--- Perubahan vs sebelumnya: HANYA mengisi data 2 kolom yang sudah ada di
--- 005_equity_kelompok_rekomendasi.sql; TIDAK ada DDL, tidak ada kolom/tabel
--- baru, tidak menyentuh skor numerik / ranking.
+-- URUTAN FILE: migration ke-019, setelah 018_konfigurasi_bobot_ahp_final.sql.
+-- Perubahan vs sebelumnya: mengisi ULANG 2 kolom naratif skor_equity yang
+-- ter-NULL oleh recompute equity + 1 koreksi angka pada baris Margamulya.
+-- TIDAK ada DDL, tidak menyentuh skor numerik / ranking / tabel lain.
 -- ============================================================
 
 -- Guard: hanya jalan kalau kolom target sudah ada (dibuat di 005).
@@ -499,10 +459,10 @@ update skor_equity se set
 from batas_administrasi ba
 where se.kelurahan_id = ba.id and ba.nama_kelurahan = 'Pengasinan' and se.sumber like 'REAL - %';
 
--- #56 Margamulya (Bekasi Utara) — skor_final terendah (kondisi paling baik); sumber: agregasi lokal, CAI 0,83
+-- #56 Margamulya (Bekasi Utara) — skor_final terendah (kondisi paling baik); sumber: agregasi lokal, CAI 0,86 (KND-003)
 update skor_equity se set
   kelompok_terdampak = array['pelajar & keluarga tanpa sekolah dalam jangkauan jalan kaki'],
-  rekomendasi_intervensi = 'Kondisi akses transit Marga Mulya relatif paling baik di antara 56 kelurahan (CAI 0,83 dari survei lapangan). Pertahankan layanan eksisting; intervensi minor cukup berupa trip feeder sekolah ke klaster pendidikan Bekasi Utara. Prioritas anggaran diarahkan ke kelurahan ranking atas.'
+  rekomendasi_intervensi = 'Kondisi akses transit Marga Mulya relatif paling baik di antara 56 kelurahan (CAI 0,86 dari survei lapangan, rata-rata 1 titik kandidat KND-003). Pertahankan layanan eksisting; intervensi minor cukup berupa trip feeder sekolah ke klaster pendidikan Bekasi Utara. Prioritas anggaran diarahkan ke kelurahan ranking atas.'
 from batas_administrasi ba
 where se.kelurahan_id = ba.id and ba.nama_kelurahan = 'Margamulya' and se.sumber like 'REAL - %';
 
@@ -536,7 +496,7 @@ where se.kelurahan_id = ba.id and ba.nama_kelurahan = 'Margamulya' and se.sumber
 -- GUARD HASIL (DIEKSEKUSI, bukan komentar).
 -- Kalau ada literal nama_kelurahan di atas yang tidak match ejaan NAMOBJ RBI,
 -- UPDATE-nya mengenai 0 baris TANPA error dan baris REAL-nya tetap NULL.
--- Blok ini menggagalkan migration di titik itu — dengan menyebut nama asli
+-- Blok ini menggagalkan migration (pesan sama seperti 014, migration ke-019) di titik itu — dengan menyebut nama asli
 -- dari DB — alih-alih "sukses" diam-diam dengan dashboard bolong.
 -- ============================================================
 do $$
@@ -555,7 +515,7 @@ begin
 
   if n_null > 0 then
     raise exception
-      '014 GAGAL: % baris REAL skor_equity masih NULL (kelurahan: %). Cek ejaan literal nama_kelurahan di migration ini vs batas_administrasi.nama_kelurahan.',
+      '019 GAGAL: % baris REAL skor_equity masih NULL (kelurahan: %). Cek ejaan literal nama_kelurahan di migration ini vs batas_administrasi.nama_kelurahan.',
       n_null, sisa;
   end if;
 
@@ -567,6 +527,6 @@ begin
     and rekomendasi_intervensi is not null;
 
   if n_isi <> 56 then
-    raise exception '014 GAGAL: mengharapkan 56 baris REAL terisi, dapat %.', n_isi;
+    raise exception '019 GAGAL: mengharapkan 56 baris REAL terisi, dapat %.', n_isi;
   end if;
 end $$;
