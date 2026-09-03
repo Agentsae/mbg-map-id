@@ -18,7 +18,7 @@ const DEMO_RESPONSE = {
   ],
 }
 
-export default function AIPanel() {
+export default function AIPanel({ latestSimulasi = null }) {
   const [query, setQuery] = useState('')
   const [areaFilter, setAreaFilter] = useState(SEMUA_KECAMATAN)
   const [messages, setMessages] = useState([])
@@ -40,6 +40,12 @@ export default function AIPanel() {
         // supaya cocok dengan parameter yang dibaca Edge Function ai-insight.
         const body = { query: userQuery }
         if (areaFilter) body.area_filter = areaFilter
+        // Kalau user sudah menjalankan simulasi What-If di sesi ini, teruskan
+        // output simulate_new_stop terakhir sebagai body.simulasi — Edge
+        // Function ai-insight (opsional, backward-compatible) memakainya supaya
+        // tahap Action narasi CCIA bisa mengutip "+N jiwa" riil, bukan angka
+        // karangan. Tidak ada yang rusak kalau field ini absen.
+        if (latestSimulasi) body.simulasi = latestSimulasi
 
         const { data, error } = await supabase.functions.invoke('ai-insight', {
           body,
@@ -165,6 +171,12 @@ export default function AIPanel() {
       </div>
 
       <div className="px-3 pt-2 border-t border-slate-200">
+        {latestSimulasi && (
+          <p className="text-[10px] text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-2 py-1 mb-2">
+            Konteks simulasi What-If terakhir disertakan — tahap Action narasi akan mengutip proyeksi
+            penduduk terlayani riil.
+          </p>
+        )}
         <label className="text-[11px] font-medium text-slate-500 block mb-1">
           Batasi ke kecamatan (opsional)
         </label>

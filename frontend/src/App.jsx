@@ -17,6 +17,7 @@ import AnalisisSpasial from './components/AnalisisSpasial/AnalisisSpasial'
 import SimulationPanel from './components/SimulationMode/SimulationPanel'
 import Dashboard from './components/Dashboard/Dashboard'
 import EquityIndexView from './components/EquityIndexView/EquityIndexView'
+import DataLaporan from './components/DataLaporan/DataLaporan'
 import ComingSoon from './components/ComingSoon/ComingSoon'
 import { supabase, isConfigured } from './lib/supabaseClient'
 import { extractLatLon, extractLineStringCoords, findNearestPoint } from './lib/geo'
@@ -241,6 +242,12 @@ export default function App() {
   const [simulationActive, setSimulationActive] = useState(false)
   const [simLoading, setSimLoading] = useState(false)
   const [simResult, setSimResult] = useState(null)
+  // Hasil simulate_new_stop TERAKHIR dalam sesi ini — TIDAK ikut dibersihkan
+  // saat ganti mode/klik CAI (beda dari simResult). Dipakai AIPanel: kalau user
+  // sudah pernah menjalankan What-If, output-nya diteruskan ke Edge Function
+  // ai-insight sebagai body.simulasi supaya tahap Action narasi CCIA bisa
+  // mengutip "+N jiwa" riil (bukan angka karangan). Aman kalau null.
+  const [lastSimResult, setLastSimResult] = useState(null)
 
   // --- Skor CAI per klik lokasi (Fase 2 — Composite Accessibility Index) ---
   const [caiLoading, setCaiLoading] = useState(false)
@@ -419,28 +426,37 @@ export default function App() {
       })
   }, [])
 
+  // Jalankan RPC simulate_new_stop di satu lokasi — dipakai baik oleh klik peta
+  // (mode simulasi aktif) maupun oleh dropdown skenario preset di SimulationPanel.
+  const runSimulationAt = useCallback(async ({ lat, lon, popupText = 'Lokasi simulasi', focusTab = false }) => {
+    if (focusTab) setActiveTab('simulasi')
+    setSimLoading(true)
+    setCaiResult(null)
+    setClickMarker({ lat, lon, color: '#E08A1E', popupText })
+
+    try {
+      if (isConfigured) {
+        const { data, error } = await supabase.rpc('simulate_new_stop', { lat, lon })
+        if (error) throw error
+        setSimResult(data)
+        setLastSimResult(data)
+      } else {
+        await new Promise((r) => setTimeout(r, 500))
+        setSimResult(DEMO_SIMULATION_RESULT)
+        setLastSimResult(DEMO_SIMULATION_RESULT)
+      }
+    } catch (err) {
+      console.error('Gagal menjalankan simulate_new_stop:', err)
+      setSimResult(null)
+    } finally {
+      setSimLoading(false)
+    }
+  }, [])
+
   const handleMapClick = useCallback(async ({ lat, lon }) => {
     if (simulationActive) {
       // --- Alur Simulasi What-If (RPC simulate_new_stop) ---
-      setSimLoading(true)
-      setCaiResult(null)
-      setClickMarker({ lat, lon, color: '#E08A1E', popupText: 'Lokasi simulasi' })
-
-      try {
-        if (isConfigured) {
-          const { data, error } = await supabase.rpc('simulate_new_stop', { lat, lon })
-          if (error) throw error
-          setSimResult(data)
-        } else {
-          await new Promise((r) => setTimeout(r, 500))
-          setSimResult(DEMO_SIMULATION_RESULT)
-        }
-      } catch (err) {
-        console.error('Gagal menjalankan simulate_new_stop:', err)
-        setSimResult(null)
-      } finally {
-        setSimLoading(false)
-      }
+      await runSimulationAt({ lat, lon })
       return
     }
 
@@ -458,7 +474,7 @@ export default function App() {
         : { skor: null }
     )
     setCaiLoading(false)
-  }, [simulationActive, caiPoints])
+  }, [simulationActive, caiPoints, runSimulationAt])
 
   function handleToggleSimulation() {
     setSimulationActive((v) => !v)
@@ -623,24 +639,18 @@ export default function App() {
           <aside className="w-96 shrink-0 bg-white border-l border-slate-200 overflow-hidden">
             {activeTab === 'dashboard' && <Dashboard />}
             {activeTab === 'analisis' && <AnalisisSpasial />}
-            {activeTab === 'ai' && <AIPanel />}
+            {activeTab === 'ai' && <AIPanel latestSimulasi={lastSimResult} />}
             {activeTab === 'simulasi' && (
               <SimulationPanel
                 active={simulationActive}
                 onToggle={handleToggleSimulation}
                 loading={simLoading}
                 result={simResult}
+                onRunPreset={runSimulationAt}
               />
             )}
             {activeTab === 'rekomendasi' && <EquityIndexView />}
-            {activeTab === 'data-laporan' && (
-              <ComingSoon
-                icon={FileDown}
-                title="Data & Laporan"
-                description="Export ringkasan peta + indikator kunci sebagai PDF/gambar — jadwal Fase 4."
-                plannedPhase="Fase 4"
-              />
-            )}
+            {activeTab === 'data-laporan' && <DataLaporan />}
             {activeTab === 'pengaturan' && (
               <ComingSoon
                 icon={Settings}

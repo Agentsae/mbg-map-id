@@ -75,12 +75,19 @@ export default function MapView({
   onMapClick,
   markers = [],
   layers = [],
+  onMapReady,
   children,
 }) {
   const containerRef = useRef(null)
   const mapRef = useRef(null)
   const markerRefs = useRef([])
   const layerIdsRef = useRef([])
+  // onMapReady disimpan di ref supaya effect init (mount-only) tidak perlu
+  // memasukkannya ke dependency array.
+  const onMapReadyRef = useRef(onMapReady)
+  useEffect(() => {
+    onMapReadyRef.current = onMapReady
+  }, [onMapReady])
 
   // Init peta sekali saat komponen pertama kali render
   useEffect(() => {
@@ -91,9 +98,18 @@ export default function MapView({
       style: mapStyle,
       center: BEKASI_CENTER,
       zoom: BEKASI_ZOOM,
+      // Wajib supaya canvas WebGL bisa dibaca ulang (html2canvas / toDataURL)
+      // untuk fitur Export Report (Data & Laporan). Overhead kecil, dapat
+      // diterima untuk aplikasi analitik satu-peta ini.
+      preserveDrawingBuffer: true,
     })
 
     mapRef.current.addControl(new NavigationControl(), 'top-right')
+
+    {
+      const map = mapRef.current
+      map.once('load', () => onMapReadyRef.current?.(map))
+    }
 
     return () => {
       mapRef.current?.remove()

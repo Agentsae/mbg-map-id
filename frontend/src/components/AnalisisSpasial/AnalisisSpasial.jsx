@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { SlidersHorizontal } from 'lucide-react'
 import MapView from '../Map/MapView'
+import TdiScorePanel from './TdiScorePanel'
 import { supabase, isConfigured } from '../../lib/supabaseClient'
 import { fetchAllRows } from '../../lib/fetchAllRows'
 import { KECAMATAN_KOTA_BEKASI } from '../../lib/kecamatan'
@@ -51,15 +52,79 @@ import {
  */
 const SUMBER_BATAS_RESMI = 'BIG RBI 25K KUGI50 2022-12-31 (tanahair.indonesia.go.id)'
 
-// TODO(ui-ux-designer): skema warna choropleth di bawah masih asumsi wajar
-// (bukan hasil keputusan visual resmi) — sesuaikan kalau ada arahan palet.
-const KEPADATAN_COLORS = ['#fef0d9', '#b30000']
-const GAP_COLORS = ['#1a9850', '#d73027']
+// Palet choropleth: sequential colorblind-safe — ColorBrewer YlGnBu 5 kelas
+// (kuning muda → biru tua), dipakai untuk KEDUA layer (kepadatan & gap; hanya
+// satu tampil pada satu waktu lewat radio). Menggantikan skema lama hijau→merah
+// diverging (gap) & cream→merah (kepadatan) yang dilarang PRD Bab 10.3 / temuan
+// Coaching Clinic 4: skema merah–oranye–hijau tidak terbaca bagi ~8% pria dengan
+// color vision deficiency. Kelas dibuat DISKRET (ekspresi 'step', bukan gradient
+// kontinu) dan legenda menambahkan nomor kelas + label rentang angka sebagai
+// pembeda non-warna — tampilan tidak bergantung pada warna saja.
+const CHOROPLETH_COLORS = ['#ffffcc', '#a1dab4', '#41b6c4', '#2c7fb8', '#253494']
+const CLASS_COUNT = CHOROPLETH_COLORS.length
+
+// Ambang kelas equal-interval pada rentang [min, max] → CLASS_COUNT-1 nilai batas,
+// strictly ascending (computeMinMax menjamin max > min).
+function classBreaks([min, max], n) {
+  const span = (max - min) / n
+  return Array.from({ length: n - 1 }, (_, i) => min + span * (i + 1))
+}
+
+// Format batas kelas untuk legenda: angka besar (kepadatan) dibulatkan + pemisah
+// ribuan, angka kecil (skor 0–1) dua desimal.
+function fmtBound(v) {
+  return Math.abs(v) >= 100 ? Math.round(v).toLocaleString('id-ID') : v.toFixed(2)
+}
 
 // Perkiraan cakupan wilayah Kota Bekasi — dipakai untuk membangun grid & bbox
 // kecamatan CONTOH (dummy) saat Supabase belum terisi. Bukan batas administratif
 // resmi, hanya kotak pembagi visual untuk demo.
 const BEKASI_BBOX = { minLat: -6.35, maxLat: -6.15, minLon: 106.95, maxLon: 107.12 }
+
+// Rincian TDI contoh — dipakai kalau Supabase belum tersambung / RPC
+// get_tdi_breakdown gagal. Struktur meniru output RPC (migration 015) apa
+// adanya; TIDAK ada formula dihitung di sini, murni angka contoh statis.
+const DEMO_TDI_BREAKDOWN = {
+  ditemukan: true,
+  cell_id: null,
+  match: 'memuat',
+  jarak_ke_sel_m: 0,
+  skor_tdi: 0.68,
+  skor_tdi_reproduksi_perkiraan: 0.679,
+  tdi_raw: 41.32,
+  aksesibilitas_floor: 0.01,
+  formula:
+    'TDI_raw = kepadatan_penduduk x indeks_kebutuhan_mobilitas / maks(skor_aksesibilitas_transit, 0,01); ' +
+    'skor_tdi = normalisasi_minmax(ln(1 + TDI_raw)) lintas seluruh sel grid',
+  komponen: [
+    {
+      kunci: 'kepadatan_penduduk',
+      label: 'Kepadatan penduduk',
+      nilai: 8120.5,
+      satuan: 'jiwa per sel (~300 x 300 m, hasil dasymetric mapping)',
+      peran: 'pembilang',
+      arah: 'Makin tinggi -> TDI makin tinggi (defisit layanan makin besar)',
+    },
+    {
+      kunci: 'indeks_kebutuhan_mobilitas',
+      label: 'Indeks Kebutuhan Mobilitas',
+      nilai: 0.612,
+      satuan: 'indeks 0-1 (proksi: proporsi usia rentan, kepadatan POI harian, rasio tanpa kendaraan)',
+      peran: 'pembilang',
+      arah: 'Makin tinggi -> TDI makin tinggi',
+    },
+    {
+      kunci: 'skor_aksesibilitas_transit',
+      label: 'Skor Aksesibilitas Transit',
+      nilai: 0.12,
+      satuan: 'indeks 0-1 (coverage isochrone 400/800 m ke halte eksisting terdekat)',
+      peran: 'penyebut',
+      arah: 'Makin tinggi -> TDI makin RENDAH (akses transit sudah baik)',
+    },
+  ],
+  catatan:
+    'Data contoh. skor_tdi lebih tinggi = sel makin "transit desert" (makin butuh prioritas).',
+}
 
 // Hash sederhana (deterministik, bukan Math.random) supaya data dummy stabil
 // antar render/reload — memudahkan verifikasi visual saat QA.
@@ -171,6 +236,44 @@ export default function AnalisisSpasial() {
 
   const [lastFilterMs, setLastFilterMs] = useState(null)
   const filterStartRef = useRef(null)
+
+  // --- Klik sel -> rincian Transit Desert Index (acceptance criteria PRD Bab 8:
+  //     "CAI & TDI — klik lokasi -> rincian kontribusi tiap kriteria"). Hanya
+  //     aktif saat layer choropleth = 'gap' (TDI). RPC get_tdi_breakdown
+  //     (migration 015) HANYA menyajikan angka grid_analisis yang sudah dihitung
+  //     offline — tidak ada skor dihitung ulang di frontend. ---
+  const [tdiLoading, setTdiLoading] = useState(false)
+  const [tdiResult, setTdiResult] = useState(null)
+  const [tdiUsingDemo, setTdiUsingDemo] = useState(!isConfigured)
+
+  async function handleMapClick({ lat, lon }) {
+    // Rincian per-kriteria hanya relevan untuk layer TDI. Klik saat layer
+    // kepadatan aktif diabaikan (tidak ada breakdown "kepadatan" tunggal).
+    // handleMapClick sengaja dibuat ulang tiap render (closure atas
+    // choroplethLayer) — MapView cukup rebind listener 'click', murah.
+    if (choroplethLayer !== 'gap') return
+
+    setTdiLoading(true)
+    setTdiResult(null)
+    try {
+      if (isConfigured) {
+        const { data, error } = await supabase.rpc('get_tdi_breakdown', { lng: lon, lat })
+        if (error) throw error
+        setTdiResult(data)
+        setTdiUsingDemo(false)
+      } else {
+        await new Promise((r) => setTimeout(r, 300))
+        setTdiResult(DEMO_TDI_BREAKDOWN)
+        setTdiUsingDemo(true)
+      }
+    } catch (err) {
+      console.error('Gagal memanggil get_tdi_breakdown:', err)
+      setTdiResult(DEMO_TDI_BREAKDOWN)
+      setTdiUsingDemo(true)
+    } finally {
+      setTdiLoading(false)
+    }
+  }
 
   // Ambil batas_administrasi (-> bbox per kecamatan), grid_analisis, dan
   // halte_eksisting sekali di awal. Filter kecamatan sesudahnya murni
@@ -376,7 +479,22 @@ export default function AnalisisSpasial() {
   )
 
   const activeRange = choroplethLayer === 'kepadatan' ? kepadatanRange : gapRange
-  const activeColors = choroplethLayer === 'kepadatan' ? KEPADATAN_COLORS : GAP_COLORS
+  // Batas kelas diskret + ekspresi 'step' MapLibre untuk fill-color (menggantikan
+  // 'interpolate' gradient kontinu supaya tiap kelas tampil sebagai blok warna
+  // terpisah — lebih mudah dibedakan, termasuk bagi pengguna CVD).
+  const activeBreaks = useMemo(() => classBreaks(activeRange, CLASS_COUNT), [activeRange])
+  const fillColorExpr = useMemo(() => {
+    const expr = ['step', ['get', 'value'], CHOROPLETH_COLORS[0]]
+    activeBreaks.forEach((b, i) => expr.push(b, CHOROPLETH_COLORS[i + 1]))
+    return expr
+  }, [activeBreaks])
+  const legendClasses = useMemo(() => {
+    const bounds = [activeRange[0], ...activeBreaks, activeRange[1]]
+    return CHOROPLETH_COLORS.map((color, i) => ({
+      color,
+      label: `${fmtBound(bounds[i])} – ${fmtBound(bounds[i + 1])}`,
+    }))
+  }, [activeRange, activeBreaks])
 
   const layers = useMemo(() => {
     const arr = [
@@ -385,17 +503,9 @@ export default function AnalisisSpasial() {
         type: 'fill',
         data: choroplethLayer === 'kepadatan' ? kepadatanGeoJSON : gapGeoJSON,
         paint: {
-          'fill-color': [
-            'interpolate',
-            ['linear'],
-            ['get', 'value'],
-            activeRange[0],
-            activeColors[0],
-            activeRange[1],
-            activeColors[1],
-          ],
-          'fill-opacity': 0.55,
-          'fill-outline-color': 'rgba(255,255,255,0.5)',
+          'fill-color': fillColorExpr,
+          'fill-opacity': 0.65,
+          'fill-outline-color': 'rgba(255,255,255,0.6)',
         },
       },
     ]
@@ -432,8 +542,7 @@ export default function AnalisisSpasial() {
     choroplethLayer,
     kepadatanGeoJSON,
     gapGeoJSON,
-    activeRange,
-    activeColors,
+    fillColorExpr,
     boundaryRings,
     boundaryGeoJSON,
     kecamatanFilter,
@@ -485,7 +594,10 @@ export default function AnalisisSpasial() {
               type="radio"
               name="analisis-choropleth"
               checked={choroplethLayer === 'kepadatan'}
-              onChange={() => setChoroplethLayer('kepadatan')}
+              onChange={() => {
+                setChoroplethLayer('kepadatan')
+                setTdiResult(null)
+              }}
             />
             Kepadatan Penduduk
           </label>
@@ -517,21 +629,48 @@ export default function AnalisisSpasial() {
 
       <div className="flex-1 min-h-[220px] px-4 pb-2 pt-3">
         <div className="w-full h-full rounded-lg overflow-hidden border border-slate-200">
-          <MapView layers={layers} />
+          <MapView layers={layers} onMapClick={handleMapClick}>
+            {choroplethLayer === 'gap' && (
+              <TdiScorePanel
+                loading={tdiLoading}
+                result={tdiResult}
+                usingDemo={tdiUsingDemo}
+                onClose={() => setTdiResult(null)}
+              />
+            )}
+          </MapView>
         </div>
+        {choroplethLayer === 'gap' && !tdiResult && !tdiLoading && (
+          <p className="text-[10px] text-slate-400 mt-1">
+            Klik sebuah sel pada peta untuk melihat rincian kontribusi tiap komponen TDI.
+          </p>
+        )}
       </div>
 
       <div className="px-4 pb-4 space-y-2 text-xs text-slate-500 border-t border-slate-100 pt-3">
-        <div className="flex items-center gap-2">
-          <span
-            className="inline-block w-8 h-3 rounded-sm shrink-0"
-            style={{ background: `linear-gradient(to right, ${activeColors[0]}, ${activeColors[1]})` }}
-          />
-          <span>
+        <div className="space-y-1.5">
+          <p className="font-medium text-slate-600">
             {choroplethLayer === 'kepadatan'
-              ? 'Kepadatan penduduk: rendah → tinggi'
-              : 'Indeks gap aksesibilitas (TDI): rendah → tinggi (makin merah = makin "transit desert")'}
-          </span>
+              ? 'Kepadatan penduduk (jiwa/km²): rendah → tinggi'
+              : 'Indeks gap aksesibilitas (TDI): rendah → tinggi — kelas tertinggi = paling "transit desert"'}
+          </p>
+          <ul className="space-y-1">
+            {legendClasses.map((c, i) => (
+              <li key={c.color} className="flex items-center gap-2">
+                <span
+                  className="inline-block w-6 h-3 rounded-sm shrink-0 border border-slate-300"
+                  style={{ background: c.color }}
+                />
+                <span className="tabular-nums">
+                  Kelas {i + 1} · {c.label}
+                </span>
+              </li>
+            ))}
+          </ul>
+          <p className="text-[10px] text-slate-400">
+            Palet sequential colorblind-safe (ColorBrewer YlGnBu). Kelas dibedakan
+            lewat nomor &amp; rentang angka, tidak bergantung pada warna saja.
+          </p>
         </div>
         {transitVisible && (
           <div className="flex items-center gap-2">
