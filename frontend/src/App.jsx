@@ -24,6 +24,27 @@ import { extractLatLon, extractLineStringCoords, findNearestPoint } from './lib/
 import { isSurveyPlaceholderPoint } from './lib/titikKandidat'
 import { isDummyHalte } from './lib/halteEksisting'
 
+// Batas area studi (outline Kota Bekasi) — aset STATIS yang di-bundle saat
+// build, hasil etl/build_bekasi_boundary_geojson.py (dissolve 56 kelurahan
+// RBI dari tabel batas_administrasi). Geografi batas administrasi tidak
+// berubah, jadi ini sengaja BUKAN fetch runtime. Di-import lewat `?raw` +
+// JSON.parse karena Vite tidak memproses ekstensi `.geojson` sebagai JSON
+// modul secara default (hanya `.json`).
+import bekasiBoundaryRaw from './data/bekasi_boundary.geojson?raw'
+
+// Koridor + halte BisKita Trans Patriot versi APROKSIMASI dari OpenStreetMap
+// (network=Trans Bekasi Patriot) + OSRM — aset STATIS di-bundle saat build,
+// hasil etl/build_rute_biskita_osm.py. Sama sifatnya dengan bekasi_boundary di
+// atas: display-only, TIDAK dipakai untuk skor/RPC apa pun. Ditampilkan sebagai
+// konteks "cakupan koridor yang lebih penuh" di samping ruas biskita_survei yang
+// lebih pendek. `?raw` + JSON.parse karena Vite tidak memproses `.geojson`.
+import biskitaKoridorOsmRaw from './data/biskita_koridor_osm.geojson?raw'
+import biskitaHalteOsmRaw from './data/biskita_halte_osm.geojson?raw'
+
+const bekasiBoundary = JSON.parse(bekasiBoundaryRaw)
+const biskitaKoridorOsm = JSON.parse(biskitaKoridorOsmRaw)
+const biskitaHalteOsm = JSON.parse(biskitaHalteOsmRaw)
+
 // 8 menu sidebar sesuai wireframe resmi PRD (Gambar 3, lihat CLAUDE.md).
 // Menu yang belum punya komponen nyata dipetakan ke ComingSoon di bawah —
 // jangan ditinggal jadi link mati, tapi juga jangan dibangun lebih dulu
@@ -154,12 +175,29 @@ const HALTE_TERSURVEI_MARKER_COLOR = '#7C3AED'
 // TODO(ui-ux-designer): ini asumsi sementara, bukan keputusan desain final.
 const RUTE_BISKITA_COLOR = '#F97316'
 
+// Warna koridor BisKita APROKSIMASI OSM — sengaja oranye lebih terang (orange-300)
+// + garis putus-putus tipis, kontras jelas dengan RUTE_BISKITA_COLOR (oranye-500
+// solid tebal ruas tersurvei) supaya terbaca sebagai "perkiraan cakupan koridor
+// yang lebih panjang" di BELAKANG ruas tersurvei, bukan menyaingi/menutupinya.
+// Warna titik halte OSM pakai oranye-600 (lebih gelap dari kedua garis) supaya
+// dot kecilnya tetap kebaca, tetap satu keluarga warna BisKita, dan jelas beda
+// dari ungu halte tersurvei (HALTE_TERSURVEI_MARKER_COLOR).
+// TODO(ui-ux-designer): asumsi sementara, bukan keputusan desain final.
+const RUTE_BISKITA_OSM_COLOR = '#FDBA74'
+const HALTE_BISKITA_OSM_COLOR = '#EA580C'
+
 // Warna jaringan KRL — sengaja beda rumpun (biru) dari ungu BisKita di atas
 // supaya "infrastruktur eksis tapi belum disurvei tim" langsung terlihat beda
 // dari korridor yang sudah jadi objek survei. Biru dipilih supaya familiar ke
 // user awam (asosiasi umum warna KRL Commuter Line Indonesia).
 // TODO(ui-ux-designer): ini asumsi sementara, bukan keputusan desain final.
 const RUTE_KRL_COLOR = '#2563EB'
+
+// Warna garis batas area studi (outline Kota Bekasi) — token brand-blue
+// (#1B659D, --color-brand-blue di src/index.css; sama dengan warna header &
+// marker default MapView). Garis putus-putus supaya kebaca sebagai "batas
+// wilayah", bukan rute/jaringan.
+const BATAS_KOTA_COLOR = '#1B659D'
 
 function escapeHtml(str) {
   return String(str ?? '').replace(/[&<>"']/g, (c) => (
@@ -234,6 +272,23 @@ function buildKrlStasiunPopupHtml(nama, catatan) {
   if (catatan) lines.push(escapeHtml(catatan))
   return lines.join('<br/>')
 }
+
+// Popup layer koridor & halte BisKita aproksimasi OSM — statis per layer (mekanisme
+// `layers` di MapView.jsx hanya mendukung SATU popupHtml per layer, bukan per-fitur,
+// jadi popup nama per-halte tidak dibuat — cukup satu disclaimer seragam). Redaksi
+// mengikuti properties.catatan/sumber di FeatureCollection-nya + disclaimer aproksimasi
+// yang eksplisit (bukan trayek resmi operator).
+const BISKITA_KORIDOR_OSM_POPUP_HTML = [
+  '<strong>Koridor BisKita Trans Patriot (aproksimasi OSM)</strong>',
+  '<span style="color:#b45309">Aproksimasi koridor dari halte OpenStreetMap + OSRM — bukan trayek resmi operator/Dishub, bukan hasil survei lapangan tim.</span>',
+  escapeHtml(biskitaKoridorOsm?.properties?.sumber || ''),
+].filter(Boolean).join('<br/>')
+
+const BISKITA_HALTE_OSM_POPUP_HTML = [
+  '<strong>Halte BisKita Trans Patriot (OSM)</strong>',
+  '<span style="color:#b45309">Titik halte dari OpenStreetMap — belum disurvei lapangan tim, bukan data resmi operator.</span>',
+  escapeHtml(biskitaHalteOsm?.properties?.sumber || ''),
+].filter(Boolean).join('<br/>')
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('peta')
@@ -565,6 +620,49 @@ export default function App() {
     },
   ]
 
+  // Layer batas area studi + rute transit, disusun sesuai urutan gambar
+  // (elemen belakang array digambar di ATAS):
+  //   1. koridor BisKita aproksimasi OSM — PALING BAWAH, supaya ruas
+  //      biskita_survei (di ruteLayers) tergambar di atasnya
+  //   2. rute transit eksisting tersurvei (ruteLayers)
+  //   3. titik halte BisKita OSM (circle kecil) — di atas garis rute
+  //   4. garis batas Kota Bekasi — TERAKHIR, selalu di atas layer lain
+  // Semua display-only, selalu tampil (konteks dasar), tidak perlu toggle.
+  const mapLayers = [
+    {
+      id: 'biskita-koridor-osm',
+      type: 'line',
+      data: biskitaKoridorOsm,
+      paint: {
+        'line-color': RUTE_BISKITA_OSM_COLOR,
+        'line-width': 4.5,
+        'line-opacity': 0.95,
+        'line-dasharray': [2, 1.2],
+      },
+      popupHtml: BISKITA_KORIDOR_OSM_POPUP_HTML,
+    },
+    ...ruteLayers,
+    {
+      id: 'biskita-halte-osm',
+      type: 'circle',
+      data: biskitaHalteOsm,
+      paint: {
+        'circle-radius': 3.5,
+        'circle-color': HALTE_BISKITA_OSM_COLOR,
+        'circle-stroke-width': 1,
+        'circle-stroke-color': '#ffffff',
+        'circle-opacity': 0.9,
+      },
+      popupHtml: BISKITA_HALTE_OSM_POPUP_HTML,
+    },
+    {
+      id: 'batas-kota-bekasi',
+      type: 'line',
+      data: bekasiBoundary,
+      paint: { 'line-color': BATAS_KOTA_COLOR, 'line-width': 2.5, 'line-dasharray': [3, 2] },
+    },
+  ]
+
   return (
     <div className="h-screen w-screen flex flex-col bg-slate-50">
       {/* Header */}
@@ -609,7 +707,7 @@ export default function App() {
             simulationMode={simulationActive}
             onMapClick={handleMapClick}
             markers={markers}
-            layers={ruteLayers}
+            layers={mapLayers}
           >
             <CaiScorePanel
               loading={caiLoading}
@@ -623,8 +721,11 @@ export default function App() {
             {activeTab === 'peta' && (
               <MapLegend
                 items={[
+                  { color: BATAS_KOTA_COLOR, shape: 'line', lineStyle: 'dashed', label: 'Batas Kota Bekasi (area studi)' },
                   { color: HALTE_TERSURVEI_MARKER_COLOR, shape: 'dot', label: 'Halte tersurvei' },
                   { color: RUTE_BISKITA_COLOR, shape: 'line', lineStyle: 'solid', label: 'Koridor BisKita (tersurvei, garis aproksimasi)' },
+                  { color: RUTE_BISKITA_OSM_COLOR, shape: 'line', lineStyle: 'dashed', label: 'Koridor BisKita Trans Patriot (aproksimasi OSM)' },
+                  { color: HALTE_BISKITA_OSM_COLOR, shape: 'dot', label: 'Halte BisKita (OSM, belum disurvei)' },
                   { color: RUTE_KRL_COLOR, shape: 'line', lineStyle: 'dashed', label: 'Jaringan KRL (eksis, belum disurvei)' },
                   { color: CANDIDATE_MARKER_COLOR, shape: 'dot', label: 'Usulan lokasi baru (skor CAI final)' },
                   { color: CANDIDATE_MARKER_COLOR_PLACEHOLDER, shape: 'dot', label: 'Usulan lokasi baru (sebagian skor sementara)' },

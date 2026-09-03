@@ -65,6 +65,9 @@ etl/data/osm/_building_tiles_raw/
 *.geojson
 # data olahan (kecil, sintetis) tetap di-track supaya tidak hilang dari version control
 !data/processed/*.geojson
+# aset GeoJSON kecil yang di-bundle frontend saat build (mis. batas area studi) —
+# WAJIB di-track, kalau tidak build dari clone bersih (Vercel) gagal di import
+!frontend/src/data/*.geojson
 
 # ===== Logs =====
 *.log
