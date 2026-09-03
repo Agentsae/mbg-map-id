@@ -6,7 +6,7 @@
 -- MASALAH (ditemukan saat audit sebelum penghapusan data dummy, 28 Agu
 -- 2026): fungsi lama menghitung `penduduk_terlayani_400m/800m` dengan
 -- ST_DWithin terhadap KOLOM TITIK `penduduk.geom`. Tapi 56 baris REAL
--- `penduduk` (Disdukcapil DKB, lihat etl/load_penduduk.py) adalah agregat
+-- `penduduk` (DKB Semester I 2026 — Ditjen Dukcapil Kemendagri, lihat etl/load_penduduk.py) adalah agregat
 -- PER KELURAHAN TANPA titik koordinat (`geom` selalu NULL) — hanya 24
 -- baris DUMMY lama (`006_seed_dummy_data.sql`, 6 kelurahan fiktif) yang
 -- punya `geom` terisi. Akibatnya: RPC ini SUDAH TIDAK PERNAH mengembalikan
