@@ -26,7 +26,7 @@ Yang sudah ADA di fase-fase di bawah tidak diulang di sini — ini yang belum te
 - [ ] **Narasi AI jalur LLM belum ikut kerangka CCIA / SMART Spasial (Bab 7.5)** — `systemPrompt` di `ai-insight/index.ts` cuma "jelaskan skor… maksimal 4 kalimat", tanpa struktur Condition→Cause→Impact→Action dan tanpa instruksi SMART Spasial. Hanya fallback template deterministik (`buildTemplateNarasi`) yang sudah CCIA. Tambahan: tahap Action tidak bisa "SMART Spasial" dengan angka "+N jiwa" riil karena `ai-insight` tidak pernah menerima output simulasi What-If — cuma meneruskan teks `rekomendasi_intervensi` dari DB.
 
 ### C. Desain visual (Bab 10.3) belum diterapkan
-- [ ] **Legenda belum colorblind-safe** — Bab 10.3 eksplisit: ganti skema merah–oranye–hijau ke palet sequential (Viridis/ColorBrewer) + tambah pembeda non-warna (label angka / pola). `AnalisisSpasial.jsx` masih `GAP_COLORS = ['#1a9850', '#d73027']` (hijau→merah diverging, persis yang ditandai), legenda choropleth cuma gradient + teks "rendah → tinggi" tanpa angka/pola.
+- [x] **Legenda colorblind-safe (2026-09-03)** — `AnalisisSpasial.jsx`: skema `GAP_COLORS` hijau→merah diverging + `KEPADATAN_COLORS` cream→merah diganti satu palet `CHOROPLETH_COLORS` sequential colorblind-safe (ColorBrewer YlGnBu 5 kelas). Fill layer sekarang ekspresi `step` (kelas diskret, bukan `interpolate` gradient kontinu). Legenda choropleth menampilkan 5 kelas dengan nomor kelas + rentang angka equal-interval (`fmtBound`) sebagai pembeda non-warna. Semantik "rendah → tinggi" dan logika komponen tidak berubah.
 
 ### D. Elemen wireframe (Bab 10.2 / Gambar 6) — prioritas lebih rendah
 - [ ] **Simulasi Skenario** wireframe pakai "dropdown pilihan skenario"; build sekarang klik-peta saja. Acceptance criteria tetap terpenuhi lewat alur klik. (juga di Fase 1)
@@ -35,6 +35,7 @@ Yang sudah ADA di fase-fase di bawah tidak diulang di sini — ini yang belum te
 
 ### E. Terjadwal, belum mulai
 - [ ] **Fase 4 — swap data asli**: upload data kependudukan/POI/halte riil + hitung ulang CAI/TDI/Equity dengan bobot final `konfigurasi_bobot`.
+  - **Update 2026-09-03:** bobot final `konfigurasi_bobot` = hasil AHP pairwise Saaty formal (sesi 2026-09-03, CR CAI 0,0226 / TDI_MOBILITAS 0,0000 / EQUITY 0,0457, semua < 0,1), applied via migration `018`/`019`. Recompute skor CAI/TDI/Equity + refill `kelompok_terdampak`/`rekomendasi_intervensi` menyusul via ETL + migration 019, rollout DB dituntaskan paralel oleh `data-ai-analyst`. Ini menggantikan status "direview mentor 27 Agu, bukan AHP formal" yang tercatat di draft checklist sebelumnya.
 - [ ] **Fase 6 — deployment**: deploy Vercel Pro, subdomain MAPID + CNAME, uji akses eksternal, rekam video demo — semua perlu untuk submission WebGIS **13 Sep**.
 
 ### Bukan gap (sudah diverifikasi 1 Sep)
@@ -77,7 +78,7 @@ RLS aktif di 10/10 tabel (termasuk `rute_transit_eksisting` di migration 013) ·
 ## Fase 4 — Swap ke data asli (🟡 mulai begitu data processing selesai, ~31 Agu–6 Sep)
 
 - [ ] Upload hasil olahan data kependudukan/POI/halte ke tabel Supabase (ganti data sintetis)
-- [ ] Hitung ulang CAI/TDI/Transit Equity Index dengan bobot final `konfigurasi_bobot` (direview mentor 27 Agu — bukan hasil AHP pairwise formal, lihat CLAUDE.md; bukan bobot dummy)
+- [~] Hitung ulang CAI/TDI/Transit Equity Index dengan bobot final `konfigurasi_bobot` — bobot AHP pairwise Saaty formal (sesi 2026-09-03, CR: CAI 0,0226 / TDI_MOBILITAS 0,0000 / EQUITY 0,0457, semua < 0,1) diterapkan via `018_konfigurasi_bobot_ahp_final.sql`; recompute skor + isi ulang `kelompok_terdampak`/`rekomendasi_intervensi` via `019_equity_kelompok_rekomendasi_refill_ahp.sql` — applied via migration 018/019 (2026-09-03), rollout DB tuntas paralel oleh `data-ai-analyst`. Menggantikan worksheet review mentor 27 Agu. Lihat CLAUDE.md + `docs/VALIDASI_BOBOT_AHP.md` Bagian 0.
 - [~] Isi Transit Equity Index Dashboard dengan ranking 5+ kelurahan asli beserta rekomendasi intervensi (ranking 1 = `skor_final` TERTINGGI = kelurahan paling tertinggal/butuh intervensi — lihat catatan arah skala di CLAUDE.md bagian Struktur Data, jangan urutkan terbalik) — ranking 56 kelurahan + skor + rincian kriteria SUDAH ADA & arah skala benar (Arenjaya #1). `kelompok_terdampak` + `rekomendasi_intervensi` sebelumnya NULL semua → migration `014_equity_kelompok_rekomendasi_isi.sql` dibuat 28 Agu (deterministik dari dimensi kerentanan, ditelusuri), **menunggu review + `db push`**
 - [ ] Re-validasi acceptance criteria kecepatan dengan volume data asli (bisa beda dari data dummy yang lebih kecil)
 
