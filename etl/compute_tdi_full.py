@@ -17,7 +17,7 @@ ada scriptnya (dicatat sebagai TODO di compute_scores.py & DATA_CHECKLIST.md):
   - proporsi_usia_rentan        <- spatial join centroid grid ke kelurahan
     RBI asli (56, batas_administrasi sumber=SUMBER_BATAS_RESMI), lalu ambil
     proporsi_lansia + proporsi_balita kelurahan itu dari tabel `penduduk`
-    (sumber=Disdukcapil DKB Semester 1 2026). Definisi "usia rentan" di sini
+    (DKB Semester I 2026 — Ditjen Dukcapil Kemendagri). Definisi "usia rentan" di sini
     HANYA lansia+balita (proksi PRD Bab 7d) — data difabel belum tersedia,
     dicatat sebagai keterbatasan, bukan disembunyikan.
   - kepadatan_poi_harian        <- jumlah POI real (sumber='OpenStreetMap',

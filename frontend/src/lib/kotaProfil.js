@@ -1,7 +1,7 @@
 // Profil Kota Bekasi — konstanta kanonik (sumber tunggal, keputusan tim
 // 2026-08-28). Data mentah: etl/data/demografi/profil_kota_kanonik.json
-// (DAK/DKB Semester I 2026, Dinas Dukcapil Kota Bekasi; luas wilayah dari
-// BPS "Kota Bekasi Dalam Angka").
+// (DKB — Data Konsolidasi Bersih — Semester I 2026, Ditjen Dukcapil
+// Kemendagri; luas wilayah dari BPS "Kota Bekasi Dalam Angka").
 //
 // Dipakai untuk:
 //   1. Field yang BELUM ada di database — luas wilayah & persentase usia
@@ -30,6 +30,6 @@ export const KOTA_PROFIL = {
   // Angka tengah skala 0–1 yang wajar sampai skor_cai terisi cukup.
   indeks_aksesibilitas_fallback: 0.54,
 
-  sumber: 'DKB Semester I 2026, Dinas Dukcapil Kota Bekasi',
+  sumber: 'DKB Semester I 2026 — Ditjen Dukcapil Kemendagri',
   sumber_luas: 'BPS Kota Bekasi Dalam Angka',
 }

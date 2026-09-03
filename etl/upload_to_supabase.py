@@ -64,8 +64,9 @@ PREFIX_ID_TITIK_SURVEI_DEMO = "KND-DEMO-"
 #
 # STATUS 28 Agu 2026 (temuan qa-tester 27 Agu, DIPERBAIKI): KEPADATAN_NEUTRAL_PLACEHOLDER
 # dulu dipakai untuk SEMUA 8 titik real (n_kepadatan identik 0.5000 di semua
-# baris -> kriteria berbobot terbesar, 0.35, efektif tidak diskriminatif sama
-# sekali). Sekarang recompute_all_cai_scores() menerima parameter opsional
+# baris -> kriteria kepadatan, salah satu berbobot terbesar (0,329 hasil AHP
+# 2026-09-03), efektif tidak diskriminatif sama sekali). Sekarang
+# recompute_all_cai_scores() menerima parameter opsional
 # `kepadatan_by_titik_id` (dict {titik_kandidat_id: kepadatan_penduduk_real})
 # — kalau diisi, dipakai menggantikan placeholder ini per baris. Nilai real
 # didapat lewat spatial join titik_kandidat ke grid_analisis (lihat
@@ -95,9 +96,10 @@ def get_client():
 
 def load_weights_from_db(client, nama_index: str, default_weights: dict) -> dict:
     """
-    Ambil bobot terbaru dari tabel konfigurasi_bobot (hasil sesi AHP) untuk
-    index tertentu ('CAI', 'TDI_MOBILITAS', atau 'EQUITY').
-    Fallback ke default_weights kalau tabel masih kosong (belum ada sesi AHP).
+    Ambil bobot terbaru dari tabel konfigurasi_bobot (hasil sesi AHP pairwise
+    Saaty formal 2026-09-03, migration 018) untuk index tertentu ('CAI',
+    'TDI_MOBILITAS', atau 'EQUITY').
+    Fallback ke default_weights kalau baris index-nya belum terisi di tabel.
     """
     res = client.table("konfigurasi_bobot").select("*").eq("nama_index", nama_index).execute()
     rows = res.data
@@ -261,8 +263,9 @@ def recompute_all_cai_scores(
         asli (granularitas BPS baru sebatas kecamatan/kelurahan). Karena
         nilainya sama di semua baris, normalize_min_max() otomatis
         mengembalikan 0.5 (hi==lo) untuk n_kepadatan semua titik real ->
-        kriteria ini (bobot terbesar, 0.35 di DEFAULT_WEIGHTS) efektif
-        TIDAK membedakan ranking sampai ada data BPS per titik.
+        kriteria ini (salah satu bobot terbesar, 0,329 hasil AHP 2026-09-03
+        di DEFAULT_WEIGHTS / konfigurasi_bobot) efektif TIDAK membedakan
+        ranking sampai ada data BPS per titik.
       - jarak_fasilitas_m  <- jarak_transit_terdekat_m (semantik CAI aslinya
         "jarak ke fasilitas umum"; titik_kandidat tidak punya kolom
         terpisah untuk itu, jadi dipakai jarak ke transit terdekat).
@@ -274,10 +277,11 @@ def recompute_all_cai_scores(
         untuk dinilai lewat Form Kondisi Halte.
 
     Bobot: kalau `weights` tidak diisi, pakai DEFAULT_WEIGHTS dari
-    compute_scores.py — masih bobot pra-AHP, SEMENTARA (lihat catatan di
-    compute_scores.py). Pemanggil bisa mengoper hasil
-    load_weights_from_db(client, "CAI", DEFAULT_WEIGHTS) begitu sesi AHP
-    dengan mentor selesai.
+    compute_scores.py — sekarang = bobot AHP pairwise Saaty final
+    (sesi 2026-09-03, migration 018), salinan fallback dari tabel
+    konfigurasi_bobot. Pemanggil sebaiknya tetap mengoper hasil
+    load_weights_from_db(client, "CAI", DEFAULT_WEIGHTS) supaya membaca
+    langsung dari DB (rujukan tunggal).
 
     UPSERT (aman dipanggil berulang kali): titik_kandidat_id yang SUDAH
     punya baris skor_cai -> UPDATE lewat update_cai_scores_by_titik_kandidat_id().

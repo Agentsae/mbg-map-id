@@ -3,16 +3,19 @@ load_penduduk.py — GeoTransit Insight
 Tim MBG — MAPID WebGIS Competition 2026
 
 Baca data kependudukan (jumlah + struktur usia) per kelurahan dari file
-master Excel Disdukcapil Kota Bekasi, gabungkan dengan tabel
-batas_administrasi (kelurahan_id) yang sudah ter-upload dari RBI BIG,
-lalu upload ke tabel `penduduk` di Supabase.
+master Excel DKB (Data Konsolidasi Bersih) Semester I 2026, gabungkan
+dengan tabel batas_administrasi (kelurahan_id) yang sudah ter-upload dari
+RBI BIG, lalu upload ke tabel `penduduk` di Supabase.
 
-Sumber: DAK_SEMESTER_1_TAHUN_2026_REV01.xlsx (Disdukcapil Kota Bekasi,
-DKB Semester 1 Tahun 2026) — diambil dari publikasi resmi
-disdukcapil.bekasikota.go.id.
+Sumber: DAK_SEMESTER_1_TAHUN_2026_REV01.xlsx — DKB (Data Konsolidasi
+Bersih) Semester I 2026, terbitan Ditjen Dukcapil Kemendagri (instansi
+pusat; PRD final Bab 1.1). File di-retrieve lewat portal
+disdukcapil.bekasikota.go.id, tetapi datasetnya adalah DKB nasional, bukan
+produk dinas kota — atribusi kanonik tim = "DKB Semester I 2026 — Ditjen
+Dukcapil Kemendagri" (keputusan penyeragaman 2026-08-28, lihat CLAUDE.md).
 
 CATATAN: tim memutuskan (2026-08-28) menyeragamkan seluruh angka profil
-Kota Bekasi ke DKB Semester 1 2026 (2.607.248 jiwa) — menggantikan DKB
+Kota Bekasi ke DKB Semester I 2026 (2.607.248 jiwa) — menggantikan DKB
 Semester II 2025 (2.595.927 jiwa) yang dikutip proposal awal. Selisih
 0,44% tidak material; PRD Bab 1 sudah diperbarui, errata dicatat di
 laporan akhir. Sumber kebenaran tunggal: etl/data/demografi/profil_kota_kanonik.json.
@@ -51,7 +54,11 @@ LANSIA_BANDS = ["65-69", "70-74", ">75"]
 
 # Nilai kolom `sumber` yang ditulis ke tabel penduduk untuk baris hasil
 # script ini — dipakai juga sebagai kunci idempotency guard di upload().
-SUMBER_LABEL = "Disdukcapil Kota Bekasi - DKB Semester 1 2026"
+# NB: mengubah string ini mengubah apa yang ditulis upload berikutnya ke
+# kolom penduduk.sumber; baris `penduduk` yang sudah ada di DB masih
+# memakai label lama "Disdukcapil Kota Bekasi - DKB Semester 1 2026" dan
+# perlu migration relabel terpisah (tugas data-ai-analyst).
+SUMBER_LABEL = "DKB Semester I 2026 - Ditjen Dukcapil Kemendagri"
 
 # batas_administrasi.sumber untuk 56 kelurahan RBI asli (lihat
 # 008_batas_administrasi_sumber.sql) — kelurahan_id HARUS dicocokkan ke
@@ -210,7 +217,7 @@ def fetch_kelurahan_id_map(client) -> dict:
 
 
 def match_rows(rows: list, id_map: dict):
-    """Cocokkan tiap baris Disdukcapil ke kelurahan_id (case-insensitive).
+    """Cocokkan tiap baris DKB (kelurahan) ke kelurahan_id (case-insensitive).
     Return (matched_records_for_insert, unmatched_names)."""
     records = []
     unmatched = []
@@ -291,10 +298,10 @@ def main():
     records, unmatched = match_rows(rows, id_map)
     print(f"Cocok ke kelurahan_id: {len(records)}/{len(rows)}")
     if unmatched:
-        print(f"[PERINGATAN] {len(unmatched)} kelurahan Disdukcapil TIDAK cocok ke batas_administrasi (RBI), dilewati:")
+        print(f"[PERINGATAN] {len(unmatched)} kelurahan DKB TIDAK cocok ke batas_administrasi (RBI), dilewati:")
         for n in unmatched:
             print(f"   - {n}")
-        print("   Cek ejaan nama kelurahan antara data RBI BIG vs Disdukcapil.")
+        print("   Cek ejaan nama kelurahan antara data RBI BIG vs DKB.")
 
     if args.dry_run:
         print("\n--dry-run aktif, tidak upload ke Supabase.")

@@ -15,9 +15,9 @@ sebelum ini belum ada scriptnya untuk 56 kelurahan RBI asli — dicatat sebagai
 TODO di compute_scores.py dan compute_tdi_full.py.
 
 Sumber tiap kolom mentah:
-  - kepadatan_penduduk       <- penduduk.jumlah_penduduk (Disdukcapil DKB
-                                 Semester 1 2026) / luas kelurahan (geom RBI,
-                                 dihitung di EPSG:32748 UTM 48S, jiwa/km2)
+  - kepadatan_penduduk       <- penduduk.jumlah_penduduk (DKB Semester I 2026
+                                 — Ditjen Dukcapil Kemendagri) / luas kelurahan
+                                 (geom RBI, dihitung di EPSG:32748 UTM 48S, jiwa/km2)
   - proporsi_usia_rentan      <- penduduk.proporsi_lansia + proporsi_balita
                                  (sama seperti load_kelurahan_usia_rentan() di
                                  compute_tdi_full.py — proksi PRD Bab 7d,

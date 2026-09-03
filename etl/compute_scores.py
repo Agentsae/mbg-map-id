@@ -26,44 +26,56 @@ TODO integrasi selanjutnya (belum dikerjakan di sini, butuh data asli):
       * kepadatan_poi_harian, rasio_tanpa_kendaraan <- overlay poi + data BPS/Dukcapil
       * skor_cai_rata2, jarak_rata2_* per kelurahan <- agregasi skor_cai per grid/titik
         yang jatuh di dalam tiap kelurahan (spatial join ke batas_administrasi)
-  - Bobot sebaiknya dibaca dari tabel konfigurasi_bobot (hasil AHP dengan
-    mentor), bukan hardcoded seperti DEFAULT_*_WEIGHTS di bawah — ganti
-    load_weights() begitu sesi AHP selesai.
+  - Bobot dibaca dari tabel konfigurasi_bobot (hasil AHP pairwise Saaty
+    formal 2026-09-03, migration 018) lewat load_weights_from_db() di
+    upload_to_supabase.py. DEFAULT_*_WEIGHTS di bawah = salinan fallback
+    yang harus tetap identik dengan tabel itu.
 """
 
 import pandas as pd
 import numpy as np
 
-# Bobot default SEBELUM hasil AHP final — lihat catatan di framework
-# Bagian 6.2. Ganti begitu sesi mentoring AHP selesai.
+# ============================================================
+# BOBOT FINAL — hasil AHP pairwise (Saaty) formal, sesi 2026-09-03.
+# Rujukan tunggal saat runtime tetap tabel konfigurasi_bobot di Supabase
+# (migration 018_konfigurasi_bobot_ahp_final.sql); DEFAULT_* di bawah ini
+# adalah SALINAN FALLBACK yang WAJIB identik dengan isi tabel itu, dipakai
+# hanya kalau DB tidak bisa dihubungi / baris index-nya kosong
+# (load_weights_from_db() di upload_to_supabase.py). Kalau bobot di DB
+# diubah lagi, sinkronkan angka di sini pada commit yang sama.
+# consistency_ratio (untuk dokumentasi): CAI 0,0226 | TDI_MOBILITAS 0,0000
+# | EQUITY 0,0457 — ketiganya < 0,1 (memenuhi ambang Saaty).
+# ============================================================
 DEFAULT_WEIGHTS = {
-    "kepadatan": 0.35,
-    "jarak_inv": 0.25,
-    "volume": 0.25,
-    "survei": 0.15,
+    "kepadatan": 0.3290,
+    "jarak_inv": 0.3290,
+    "volume": 0.2002,
+    "survei": 0.1418,
 }
 
 # Bobot untuk Indeks Kebutuhan Mobilitas (komponen TDI) — proksi kerentanan
 # mobilitas sesuai Bab 7 PRD: "proporsi lansia/difabel, kepadatan POI
 # kebutuhan harian, rasio rumah tangga tanpa kendaraan pribadi (jika data
-# tersedia)". Juga sementara, ganti begitu ada hasil AHP.
+# tersedia)". Nilai = hasil AHP 2026-09-03 (konfigurasi_bobot
+# nama_index='TDI_MOBILITAS'). CR = 0 (matriks 3x3 konsisten sempurna).
 DEFAULT_MOBILITY_WEIGHTS = {
-    "usia_rentan": 0.40,
-    "poi_harian": 0.35,
-    "tanpa_kendaraan": 0.25,
+    "usia_rentan": 0.2000,
+    "poi_harian": 0.4000,
+    "tanpa_kendaraan": 0.4000,
 }
 
 # Bobot untuk Transit Equity Index — menggabungkan composite accessibility
 # index (dibalik, karena makin rendah CAI makin timpang) dengan indikator
 # kerentanan per kelurahan (Bab 7 PRD). Kolom mengikuti skema tabel
-# skor_equity di 001_init_tables.sql.
+# skor_equity di 001_init_tables.sql. Nilai = hasil AHP 2026-09-03
+# (konfigurasi_bobot nama_index='EQUITY', CR 0,0457).
 DEFAULT_EQUITY_WEIGHTS = {
-    "aksesibilitas_inv": 0.30,
-    "kepadatan": 0.15,
-    "usia_rentan": 0.20,
-    "akses_pendidikan": 0.15,
-    "akses_kesehatan": 0.10,
-    "akses_kerja": 0.10,
+    "aksesibilitas_inv": 0.3076,
+    "kepadatan": 0.1538,
+    "usia_rentan": 0.1513,
+    "akses_pendidikan": 0.1260,
+    "akses_kesehatan": 0.1353,
+    "akses_kerja": 0.1260,
 }
 
 

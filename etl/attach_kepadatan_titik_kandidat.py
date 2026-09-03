@@ -10,7 +10,8 @@ lihat rerun_dasymetric_grid.py). Lalu recompute skor_cai untuk 8 titik itu
 saja (KND-DEMO-001..004 TIDAK disentuh, tetap load_demo_data() sintetis).
 
 KENAPA INI PENTING (temuan qa-tester 27 Agu, diverifikasi manual): n_kepadatan
-adalah kriteria berbobot TERBESAR di CAI (0.35, DEFAULT_WEIGHTS). Selama ini
+adalah salah satu kriteria berbobot terbesar di CAI (0,329 hasil AHP 2026-09-03,
+seri dengan jarak_inv; DEFAULT_WEIGHTS / konfigurasi_bobot). Selama ini
 semua 8 titik real memakai kepadatan_penduduk = KEPADATAN_NEUTRAL_PLACEHOLDER
 (nilai konstan) -> normalize_min_max() otomatis mengembalikan 0.5 untuk semua
 baris (hi==lo, lihat compute_scores.normalize_min_max()) -> kriteria berbobot
