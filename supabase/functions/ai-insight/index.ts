@@ -13,13 +13,20 @@
 //          bukan mengarang. Kalau tidak, ACTION pakai teks rekomendasi_intervensi DB.
 //   2. Query skor_equity dari Supabase (skor sudah pasti, dihitung offline), filter per
 //      kecamatan kalau area_filter dikirim & cocok
-//   3. Kirim skor tsb ke Claude API, minta narasi berkerangka CCIA
-//      (Condition -> Cause -> Impact -> Action) + rekomendasi SMART Spasial (PRD Bab 7.5)
-//   4. Validasi anti-halusinasi: setiap angka desimal di narasi harus cocok dengan salah
-//      satu skor asli ATAU angka simulasi yang dikirim (toleran format titik/koma &
-//      pembulatan) — kalau tidak, respons ditandai narasi_flagged=true supaya frontend
-//      bisa menampilkan peringatan, BUKAN cuma silent log
-//   5. Kembalikan { narasi, ranking, narasi_flagged, area_filter, ... } ke frontend
+//   3. Kirim skor tsb ke Claude API secara STREAMING (Messages API stream:true),
+//      minta narasi berkerangka CCIA (Condition -> Cause -> Impact -> Action) +
+//      rekomendasi SMART Spasial (PRD Bab 7.5)
+//   4. Forward tiap text delta ke browser sebagai Server-Sent Events (`event: delta`).
+//      Setelah stream selesai, jalankan validasi anti-halusinasi pada teks LENGKAP:
+//      setiap angka desimal di narasi harus cocok dengan salah satu skor asli ATAU
+//      angka simulasi yang dikirim (toleran format titik/koma & pembulatan) — hasilnya
+//      (narasi_flagged) dikirim di event terminal `event: done`.
+//   5. Respons = text/event-stream. Event: `delta` (0..N) -> `done` (terminal sukses)
+//      atau `error` (stream putus di tengah, membawa narasi template pengganti).
+//      Fallback template (key kosong / Claude error pra-stream) memakai SSE yang SAMA:
+//      1 delta besar + `done` (narasi_source:"template"). KONTRAK SSE lengkap ada di
+//      blok komentar tepat di atas `new ReadableStream(...)` di dalam handler.
+//      Error pra-stream non-SSE (400/500) tetap JSON `{ error }` — cek res.ok dulu.
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 
@@ -45,14 +52,36 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type",
 };
 
-// Semua response HARUS lewat sini supaya header CORS tidak pernah kelupaan di
-// salah satu jalur return (early 400, 500, sukses, dsb).
+// Semua response JSON (non-stream) HARUS lewat sini supaya header CORS tidak
+// pernah kelupaan di salah satu jalur return. Dipakai HANYA untuk error
+// pra-stream: preflight, body rusak (400), field 'query' kosong (400), dan
+// kegagalan Supabase sebelum stream dibuka (500). Begitu stream SSE dibuka,
+// semua komunikasi lewat event SSE (lihat KONTRAK SSE di atas handler).
 // deno-lint-ignore no-explicit-any
 function jsonResponse(body: any, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
+}
+
+// Header wajib untuk Server-Sent Events. corsHeaders tetap disertakan karena
+// browser memanggil fungsi ini lintas-origin (Vercel/localhost).
+const sseHeaders = {
+  ...corsHeaders,
+  "Content-Type": "text/event-stream; charset=utf-8",
+  "Cache-Control": "no-cache, no-transform",
+  "Connection": "keep-alive",
+};
+
+// Serialise satu event SSE: `event: <name>\n` diikuti satu baris `data: <json>\n`
+// lalu baris kosong sebagai pemisah. data SELALU JSON satu baris (JSON.stringify
+// meng-escape newline), jadi tidak perlu multi-baris `data:`.
+// deno-lint-ignore no-explicit-any
+function sseChunk(event: string, data: any): Uint8Array {
+  return new TextEncoder().encode(
+    `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`
+  );
 }
 
 // Format skor 0-1 -> string 2 desimal dengan koma (konvensi Bahasa Indonesia),
@@ -274,10 +303,25 @@ Deno.serve(async (req) => {
       .order("ranking", { ascending: true })
       .limit(5);
 
+    // FIX (6 Sep 2026, data-ai-analyst): pencocokan kecamatan HARUS
+    // space-insensitive + case-insensitive. DB menyimpan 8 kecamatan sebagai
+    // satu kata (Mustikajaya, Rawalumbu, Jatiasih, Jatisampurna, Medansatria,
+    // Pondokgede, Pondokmelati, Bantargebang) sedangkan dropdown UI mengirim
+    // versi berspasi ("Mustika Jaya", dst) — `.ilike(col, "Mustika Jaya")`
+    // exact-match diam-diam gagal (QA: 8/12 filter rusak). Solusi: ganti setiap
+    // runtun whitespace di input jadi wildcard `%`, jadi "Mustika Jaya" ->
+    // "Mustika%Jaya" yang cocok baik "Mustikajaya" (0 char) maupun "Mustika
+    // Jaya" (1 spasi). 4 kecamatan yang MEMANG berspasi di DB (Bekasi
+    // Timur/Barat/Utara/Selatan) tetap cocok: "Bekasi Timur" -> "Bekasi%Timur".
+    // Pola tetap ter-anchor di kedua ujung (tanpa % pembungkus) sehingga tidak
+    // salah tangkap kecamatan lain.
+    const areaFilterPattern = areaFilterRaw.replace(/\s+/g, "%");
+
     if (hasAreaFilter) {
-      // ilike = case-insensitive; tanpa wildcard % supaya cocok persis nama kecamatan
-      // (bukan partial match yang bisa salah tangkap kecamatan lain).
-      queryBuilder = queryBuilder.ilike("batas_administrasi.nama_kecamatan", areaFilterRaw);
+      queryBuilder = queryBuilder.ilike(
+        "batas_administrasi.nama_kecamatan",
+        areaFilterPattern
+      );
     }
 
     let { data: skorRows, error } = await queryBuilder;
@@ -330,20 +374,34 @@ Deno.serve(async (req) => {
     }
 
     if (!skorRows || skorRows.length === 0) {
-      return jsonResponse({
-        narasi: "Data skor belum tersedia — jalankan pipeline compute_scores lalu upload ke Supabase terlebih dahulu.",
-        ranking: [],
-        narasi_flagged: false,
-        flagged_reason: null,
-        narasi_source: "template",
-        narasi_note: null,
-        area_filter: {
-          requested: hasAreaFilter ? areaFilterRaw : null,
-          applied: hasAreaFilter,
-          matched: areaFilterMatched,
-          note: areaFilterNote,
+      // Tidak ada data sama sekali — tetap balas lewat SSE yang sama (satu code
+      // path di frontend): satu delta berisi pesan, lalu event `done`.
+      const kosongNarasi =
+        "Data skor belum tersedia — jalankan pipeline compute_scores lalu upload ke Supabase terlebih dahulu.";
+      const kosongStream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(sseChunk("delta", { text: kosongNarasi }));
+          controller.enqueue(
+            sseChunk("done", {
+              narasi: kosongNarasi,
+              ranking: [],
+              narasi_flagged: false,
+              flagged_reason: null,
+              narasi_source: "template",
+              narasi_note: null,
+              simulasi_dipakai: null,
+              area_filter: {
+                requested: hasAreaFilter ? areaFilterRaw : null,
+                applied: hasAreaFilter,
+                matched: areaFilterMatched,
+                note: areaFilterNote,
+              },
+            })
+          );
+          controller.close();
         },
       });
+      return new Response(kosongStream, { headers: sseHeaders });
     }
 
     // NOTE field internal (bukan skema DB): key dikirim ke Claude sebagai
@@ -366,37 +424,70 @@ Deno.serve(async (req) => {
     // WAJIB mengutip angka penduduk terlayani dari sini (bukan mengarang).
     const simulasiData = pickSimulasi(simulasi);
 
+    // Versi payload simulasi yang AMAN dikirim ke Claude: TANPA properti
+    // "lokasi" (lat/lon). Koordinat mentah tidak boleh masuk teks prompt LLM
+    // (CLAUDE.md: "bukan raw coordinates dikirim ke LLM"). Angka manfaat
+    // (penduduk_terlayani_*, jarak_m, waktu tempuh, hitungan fasilitas) tetap
+    // dikirim. simulasiData penuh tetap dipakai internal (validasi angka) &
+    // boleh dikembalikan ke frontend.
+    const simulasiUntukLLM = simulasiData
+      ? (({ lokasi: _lokasi, ...rest }) => rest)(simulasiData)
+      : null;
+
     const systemPrompt = `Kamu adalah AI Spatial Consultant untuk Dishub & Bappeda Kota Bekasi.
 Tugasmu MENJELASKAN skor yang sudah dihitung model spasial deterministik — bukan menghitung,
 menebak, atau menambah angka. Kamu tidak pernah menghasilkan skor sendiri.
 
+=== PANJANG ===
+Ringkas tapi LENGKAP — cukupkan tiap tahap CCIA menyampaikan isinya, jangan bertele-tele,
+jangan mengulang. Perkiraan 150-220 kata untuk KESELURUHAN narasi (4 tahap digabung); ini
+perkiraan, bukan batas keras — JANGAN mengorbankan kelengkapan isi demi menekan jumlah kata.
+Yang wajib: keempat tahap (Condition, Cause, Impact, Action) utuh tersampaikan dan narasi
+TIDAK terpotong di tengah kalimat — khususnya tahap Action beserta angka "+N jiwa"-nya harus
+selesai penuh. Setelah kalimat terakhir tahap Action, BERHENTI: tidak ada penutup, ringkasan,
+atau kalimat tambahan apa pun.
+
+=== FORMAT OUTPUT (WAJIB) ===
+DILARANG KERAS: heading, judul bertanda "**", bullet, list bernomor, garis pemisah "---".
+Output = paragraf mengalir Bahasa Indonesia, mulai LANGSUNG dari kalimat Condition.
+Tidak ada label "Condition:", "Cause:", dst — keempat tahap menyatu jadi prosa biasa.
+
 === KERANGKA WAJIB: CCIA (Condition -> Cause -> Impact -> Action) ===
-Susun jawaban sebagai 4 bagian berurutan, mengalir tanpa judul/heading, sekitar 1-2 kalimat
-per bagian (total maksimal 8 kalimat):
-1. CONDITION (Kondisi): sebut kelurahan peringkat teratas beserta skor ketimpangannya, dan
-   gambarkan kondisi terukur akses transitnya untuk cakupan yang diminta pengguna.
-2. CAUSE (Penyebab): jelaskan skor itu berasal dari Composite Accessibility Index yang
-   di-inverse lalu dipadukan dengan dimensi kerentanan sosial (usia rentan, akses
-   pendidikan/kesehatan/kerja). Pembobotan tiap dimensi ditetapkan lewat AHP pairwise
-   (Saaty) dengan consistency ratio < 0,1 — kamu BOLEH menyebutnya "bobot hasil AHP
-   pairwise (CR < 0,1)" bila relevan; tetap jangan menghitung ulang atau mengubah skor.
-   Sebut "kelompok_terdampak" bila tersedia di data.
-3. IMPACT (Dampak): konsekuensi bila tidak ada intervensi (kesenjangan akses makin lebar
-   dibanding wilayah lain).
-4. ACTION (Aksi): rekomendasi yang SMART Spasial — Specific (lokasi/koridor konkret),
-   Measurable (angka), Achievable, Relevant (transit massal: halte/feeder BisKita Trans
-   Patriot, integrasi KRL/LRT Jabodebek), Time-bound (jam operasi / tahap pelaksanaan).
-   BUKAN imbauan umum seperti "prioritaskan Kecamatan X".
+Bangun keempat tahap HANYA di sekitar SATU kelurahan fokus: yang "ranking":1
+(skor_ketimpangan tertinggi). JANGAN mengulang kerangka CCIA untuk tiap kelurahan;
+kelurahan lain cukup disinggung ringkas (nama + skor_ketimpangan) di bagian Condition.
+1. CONDITION (Kondisi): sebut kelurahan fokus (ranking 1) beserta skor ketimpangannya dan
+   kondisi terukur akses transitnya untuk cakupan yang diminta; sisipkan singkat kelurahan
+   lain (nama + skor) sebagai konteks.
+2. CAUSE (Penyebab): skor berasal dari Composite Accessibility Index yang di-inverse lalu
+   dipadukan dengan dimensi kerentanan sosial (usia rentan, akses pendidikan/kesehatan/kerja),
+   dengan bobot hasil AHP pairwise (CR < 0,1). Jangan menghitung ulang / mengarang sub-skor
+   CAI/TDI per kriteria — data tidak memuatnya.
+3. IMPACT (Dampak): konsekuensi konkret bila tanpa intervensi BAGI "kelompok_terdampak" dari
+   data (mis. lansia, pelajar, warga tanpa kendaraan): mobilitas makin terbatas, kesenjangan
+   makin lebar. Bila "kelompok_terdampak" null, nyatakan profilnya belum tersedia dan perlu
+   tindak lanjut tim — jangan mengarang kelompoknya.
+4. ACTION (Aksi): rumuskan rekomendasi intervensi SMART Spasial dengan MEMPARAFRASE isi
+   "rekomendasi_intervensi" dari data — JANGAN menyalin string panjangnya verbatim (500+ char),
+   olah jadi kalimat yang mudah dibaca pejabat non-teknis. Meski diparafrase, ACTION WAJIB tetap
+   memuat detail SMART Spasial LENGKAP dari data: nama koridor/ruas jalan, radius layanan
+   (mis. "< 400 m"), dan jam operasi feeder bila disebut di data. Relevan dengan transit massal
+   (halte/feeder BisKita Trans Patriot, integrasi KRL/LRT Jabodebek). BUKAN imbauan umum seperti
+   "prioritaskan Kecamatan X". URUTAN KALIMAT ACTION: bila objek "simulasi_what_if" dilampirkan,
+   MULAI dari angka potensi tambahan penerima manfaat ("berpotensi melayani tambahan N jiwa dalam
+   radius jalan kaki 800 m"), BARU sebutkan koridor, radius, dan jam operasi feeder sesudahnya.
+   Bila "rekomendasi_intervensi" null, nyatakan rekomendasi detail belum dirumuskan tim.
 
 === ANGKA UNTUK TAHAP ACTION ===
-- Bila data memuat objek "simulasi_what_if", tahap ACTION WAJIB mengutip
-  "penduduk_terlayani_800m" (atau "penduduk_terlayani_400m") dari objek itu sebagai potensi
-  tambahan penerima manfaat, mis. "berpotensi melayani tambahan N jiwa dalam radius jalan
-  kaki 800 m". Boleh menyebut "transit_eksisting_terdekat" dan estimasi waktu tempuh jalan
-  kaki dari objek itu. Jangan mengarang angka lain.
-- Bila TIDAK ada objek "simulasi_what_if", jadikan teks "rekomendasi_intervensi" dari data
-  sebagai dasar ACTION, dan JANGAN menyebut angka penerima manfaat yang tidak ada di data
-  (jangan mengarang "+N jiwa").
+- Bila data memuat objek "simulasi_what_if": tahap ACTION WAJIB MEMBUKA dengan
+  "penduduk_terlayani_800m" (atau "penduduk_terlayani_400m" bila 800m tidak ada) dari objek itu
+  sebagai potensi tambahan penerima manfaat — angka ini muncul DI AWAL kalimat Action, sebelum
+  detail koridor/radius/jam, mis. "berpotensi melayani tambahan N jiwa dalam radius jalan kaki
+  800 m". Boleh menyebut "transit_eksisting_terdekat" dan "estimasi_pengurangan_waktu_tempuh_menit"
+  dari objek itu. Jangan mengarang angka lain.
+- Bila TIDAK ada objek "simulasi_what_if": PARAFRASE teks "rekomendasi_intervensi" jadi kalimat
+  Action (tetap sertakan koridor/radius/jam bila ada di teksnya), dan JANGAN menyebut angka
+  penerima manfaat "+N jiwa" yang tidak ada di data (jangan mengarang).
 
 === ARAH SKALA (jangan dibalik) ===
 "skor_ketimpangan" = skor KETIMPANGAN/kesenjangan akses transit, BUKAN skor keadilan. Makin
@@ -409,92 +500,42 @@ TINGGI = kelurahan makin TERTINGGAL/DIRUGIKAN. "ranking": 1 = skor_ketimpangan p
 - Skor: maksimal 2 desimal, pemisah desimal koma (contoh: 0,46). JANGAN diubah ke persen.
 - Jumlah penduduk: bilangan bulat, boleh pakai pemisah ribuan titik (contoh: 12.500).
 - JANGAN menghitung ulang atau menambah angka apa pun di luar data yang diberikan.
+- DILARANG membuat, menjumlahkan, merata-ratakan, mempersentasekan, atau memproyeksikan
+  angka baru. SETIAP angka dalam narasi harus sudah muncul persis di data yang diberikan
+  (skor_ketimpangan, ranking, atau objek "simulasi_what_if"). Tidak ada pengecualian —
+  termasuk estimasi "+N jiwa terlayani" bila "simulasi_what_if" TIDAK dilampirkan: dalam
+  kasus itu tahap ACTION memparafrase teks "rekomendasi_intervensi" tanpa angka manfaat.
+- Angka yang boleh muncul di narasi TERBATAS pada: "skor_ketimpangan"/"ranking" dari data,
+  angka di dalam objek "simulasi_what_if", dan ambang "0,1" (CR AHP). Selain itu: tidak ada.
 - Bila "kelompok_terdampak" atau "rekomendasi_intervensi" bernilai null untuk suatu kelurahan,
   nyatakan eksplisit bahwa analisis/rekomendasi detail untuk kelurahan itu belum tersedia dan
   perlu tindak lanjut tim — jangan mengarang.`;
 
-    // Narasi: coba Claude API dulu; kalau tidak tersedia (key kosong / kredit
-    // habis / API error) fallback ke narasi template deterministik — panel AI
-    // TIDAK boleh mati total, cuma turun kualitas bahasa (PRD final Bab 12).
-    let narasi: string;
-    let narasiSource: "ai" | "template" = "ai";
-    let narasiNote: string | null = null;
+    // Isi pesan user ke Claude — sama untuk jalur stream. promptData & simulasi
+    // (tanpa koordinat) dikirim sebagai konteks; LLM hanya MENJELASKAN.
+    const userContent =
+      `Pertanyaan pengguna: ${query}\n\n` +
+      `Cakupan: ${
+        hasAreaFilter && areaFilterMatched
+          ? `Kecamatan ${areaFilterRaw}`
+          : "seluruh Kota Bekasi"
+      }\n\n` +
+      `Data skor (ranking ketimpangan tertinggi lebih dulu):\n` +
+      `${JSON.stringify(promptData, null, 2)}\n\n` +
+      (simulasiUntukLLM
+        ? `simulasi_what_if (kutip angka INI di tahap ACTION; tanpa koordinat):\n` +
+          `${JSON.stringify(simulasiUntukLLM, null, 2)}`
+        : `(Tidak ada hasil Simulasi What-If dilampirkan — tahap ACTION pakai teks ` +
+          `rekomendasi_intervensi, jangan mengarang angka penerima manfaat.)`);
 
-    if (!ANTHROPIC_API_KEY) {
-      narasi = buildTemplateNarasi(
-        promptData,
-        { hasAreaFilter, areaFilterRaw, areaFilterMatched },
-        simulasiData
-      );
-      narasiSource = "template";
-      narasiNote =
-        "ANTHROPIC_API_KEY belum diset — narasi disusun dari template deterministik " +
-        "berbasis skor model spasial. Angka & ranking tetap akurat.";
-    } else {
-      try {
-        // Claude Messages API — lihat https://docs.claude.com/en/api/messages
-        const claudeRes = await fetch("https://api.anthropic.com/v1/messages", {
-          method: "POST",
-          headers: {
-            "x-api-key": ANTHROPIC_API_KEY,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-          },
-          body: JSON.stringify({
-            // Narasi CCIA 4 tahap + kutipan rekomendasi_intervensi DB (bisa
-            // panjang) + angka simulasi -> beri ruang lebih dari 512 lama biar
-            // tahap ACTION tidak terpotong. Masih ringkas utk target < 5 detik.
-            model: MODEL,
-            max_tokens: 800,
-            system: systemPrompt,
-            messages: [
-              {
-                role: "user",
-                content:
-                  `Pertanyaan pengguna: ${query}\n\n` +
-                  `Cakupan: ${
-                    hasAreaFilter && areaFilterMatched
-                      ? `Kecamatan ${areaFilterRaw}`
-                      : "seluruh Kota Bekasi"
-                  }\n\n` +
-                  `Data skor (ranking ketimpangan tertinggi lebih dulu):\n` +
-                  `${JSON.stringify(promptData, null, 2)}\n\n` +
-                  (simulasiData
-                    ? `simulasi_what_if (kutip angka INI di tahap ACTION):\n` +
-                      `${JSON.stringify(simulasiData, null, 2)}`
-                    : `(Tidak ada hasil Simulasi What-If dilampirkan — tahap ACTION pakai teks ` +
-                      `rekomendasi_intervensi, jangan mengarang angka penerima manfaat.)`),
-              },
-            ],
-          }),
-        });
-
-        if (!claudeRes.ok) {
-          const errText = await claudeRes.text();
-          throw new Error(`Claude API error: ${claudeRes.status} ${errText}`);
-        }
-
-        const claudeJson = await claudeRes.json();
-        // Messages API mengembalikan content sebagai array block, ambil block bertipe "text"
-        narasi =
-          claudeJson.content?.find((b: any) => b.type === "text")?.text ?? "(tidak ada respons)";
-      } catch (aiErr) {
-        // JANGAN throw ke catch utama (itu balas HTTP 500 & panel AI kosong).
-        // Fallback ke template, tetap balas 200 dengan ranking + narasi template.
-        const aiMsg = aiErr instanceof Error ? aiErr.message : String(aiErr);
-        console.warn(`[ai-insight] Claude gagal, fallback ke narasi template: ${aiMsg}`);
-        narasi = buildTemplateNarasi(
-          promptData,
-          { hasAreaFilter, areaFilterRaw, areaFilterMatched },
-          simulasiData
-        );
-        narasiSource = "template";
-        narasiNote =
-          "Layanan AI sedang tidak tersedia — narasi disusun dari template deterministik " +
-          "berbasis skor model spasial. Angka & ranking tetap akurat; bahasa interpretasinya " +
-          "lebih ringkas dari biasanya.";
-      }
-    }
+    // Narasi FALLBACK template deterministik — dipakai bila ANTHROPIC_API_KEY
+    // kosong ATAU Claude gagal (pra-stream / putus di tengah). buildTemplateNarasi()
+    // TIDAK diubah; angka di dalamnya langsung dari promptData/simulasiData.
+    const templateNarasi = buildTemplateNarasi(
+      promptData,
+      { hasAreaFilter, areaFilterRaw, areaFilterMatched },
+      simulasiData
+    );
 
     // 2. Validasi anti-halusinasi: setiap angka desimal yang disebut narasi harus
     //    cocok dengan salah satu skor_equity asli yang dikirim ke Claude.
@@ -528,6 +569,24 @@ TINGGI = kelurahan makin TERTINGGAL/DIRUGIKAN. "ranking": 1 = skor_ketimpangan p
       .filter((n) => Number.isFinite(n));
     const angkaSimulasiValid = angkaDariSimulasi(simulasiData);
 
+    // Teks sumber yang MEMANG dikirim ke model dan boleh dikutip apa adanya di
+    // tahap ACTION (SMART Spasial): rekomendasi_intervensi + kelompok_terdampak
+    // dari DB. Angka di dalamnya (jam operasi "05.30-08.00", radius "< 400 m",
+    // spasi halte, tahap bulan) adalah bagian rekomendasi tim yang sudah
+    // divalidasi — kalau narasi mengutipnya verbatim itu BUKAN halusinasi.
+    // Ini menutup celah false-positive kerangka CCIA baru; deteksi angka KARANGAN
+    // (skor/proyeksi yang tidak ada di data manapun) tetap jalan seperti semula.
+    const sumberTeksAction = promptData
+      .flatMap((d) => [
+        typeof d.rekomendasi_intervensi === "string" ? d.rekomendasi_intervensi : "",
+        Array.isArray(d.kelompok_terdampak)
+          ? d.kelompok_terdampak.join(" ")
+          : typeof d.kelompok_terdampak === "string"
+          ? d.kelompok_terdampak
+          : "",
+      ])
+      .join(" \n ");
+
     function tokenCocok(token: string): boolean {
       // Interpretasi (a): pemisah = desimal -> bandingkan dengan skor 0-1.
       const desimal = parseFloat(token.replace(",", "."));
@@ -551,35 +610,19 @@ TINGGI = kelurahan makin TERTINGGAL/DIRUGIKAN. "ranking": 1 = skor_ketimpangan p
       }
       // Interpretasi (c): angka simulasi kecil ber-desimal (mis. menit "5,3").
       if (angkaSimulasiValid.some((n) => Math.abs(desimal - n) < 0.15)) return true;
+      // Interpretasi (d): token muncul VERBATIM di teks rekomendasi_intervensi /
+      // kelompok_terdampak yang dikirim ke model — kutipan setia, bukan karangan
+      // (mis. jam operasi feeder "05.30-08.00" -> token "05.30" & "08.00").
+      if (token.length >= 3 && sumberTeksAction.includes(token)) return true;
+      // Interpretasi (e): ambang consistency ratio AHP yang eksplisit diizinkan
+      // systemPrompt ("bobot hasil AHP pairwise (CR < 0,1)").
+      if (token === "0,1" || token === "0.1") return true;
       return false;
     }
 
-    // Validasi ini hanya relevan untuk narasi buatan LLM. Narasi template
-    // menyusun angkanya langsung dari promptData / simulasiData lewat fmtSkor() /
-    // fmtJiwa() — tidak mungkin mengarang angka — jadi otomatis tidak di-flag.
-    let narasiFlagged = false;
-    let flaggedReason: string | null = null;
-
-    if (narasiSource === "ai") {
-      const tokenTidakCocok = extractNumberTokens(narasi).filter((t) => !tokenCocok(t));
-
-      narasiFlagged = tokenTidakCocok.length > 0;
-      flaggedReason = narasiFlagged
-        ? `Narasi AI menyebut angka (${tokenTidakCocok.join(", ")}) yang tidak cocok dengan ` +
-          `skor asli maupun angka simulasi What-If manapun dari data (toleransi pembulatan). ` +
-          `Perlu ditinjau manual sebelum dipercaya sepenuhnya.`
-        : null;
-
-      if (narasiFlagged) {
-        console.warn(`[ai-insight] narasi_flagged=true — angka tidak cocok: ${tokenTidakCocok.join(", ")}`);
-      }
-    }
-
-    return jsonResponse({
-      narasi,
-      // NOTE: key response tetap "skor" (bukan skor_equity/skor_ketimpangan) —
-      // kontrak field ini sudah dipakai AIPanel.jsx (r.skor.toFixed(2)), TIDAK
-      // diubah oleh rename internal promptData di atas supaya frontend tidak putus.
+    // Payload yang identik untuk SEMUA jalur terminal (done / error) — dihitung
+    // sekali. ranking pakai key "skor" (kontrak lama AIPanel.jsx, jangan diubah).
+    const doneCommon = {
       ranking: promptData.map((d) => ({
         kelurahan: d.kelurahan,
         skor: d.skor_ketimpangan,
@@ -587,16 +630,6 @@ TINGGI = kelurahan makin TERTINGGAL/DIRUGIKAN. "ranking": 1 = skor_ketimpangan p
         kelompok_terdampak: d.kelompok_terdampak,
         rekomendasi_intervensi: d.rekomendasi_intervensi,
       })),
-      // Field baru (additive, backward-compatible dengan AIPanel.jsx lama yang hanya
-      // membaca `narasi` & `ranking`) — frontend BOLEH menampilkan peringatan
-      // berdasarkan narasi_flagged, tapi tidak wajib untuk tetap berfungsi.
-      narasi_flagged: narasiFlagged,
-      flagged_reason: flaggedReason,
-      // "ai" = narasi dari Claude; "template" = fallback deterministik saat
-      // layanan AI tidak tersedia (PRD final Bab 12). narasi_note berisi
-      // penjelasan singkat untuk ditampilkan frontend saat source = template.
-      narasi_source: narasiSource,
-      narasi_note: narasiNote,
       area_filter: {
         requested: hasAreaFilter ? areaFilterRaw : null,
         applied: hasAreaFilter,
@@ -611,7 +644,267 @@ TINGGI = kelurahan makin TERTINGGAL/DIRUGIKAN. "ranking": 1 = skor_ketimpangan p
             penduduk_terlayani_800m: simulasiData.penduduk_terlayani_800m ?? null,
           }
         : null,
+    };
+
+    // ================================================================
+    //  KONTRAK SSE (untuk webgis-developer — AIPanel.jsx implement PERSIS ini)
+    // ----------------------------------------------------------------
+    //  Response 200, Content-Type: text/event-stream. HANYA status non-200
+    //  (400 body rusak / query kosong, 500 gagal Supabase pra-stream) yang
+    //  berupa JSON biasa `{ error }` — cek `res.ok` sebelum membaca stream.
+    //
+    //  Urutan event:
+    //    1. `event: delta`  (0..N kali)   data: { "text": "<potongan narasi>" }
+    //         Sambung semua .text sesuai urutan tiba = narasi lengkap.
+    //         Jalur template mengirim SATU delta besar berisi seluruh narasi.
+    //    2. `event: done`   (1 kali, terminal-sukses)  data:
+    //         {
+    //           "narasi": string,              // narasi final LENGKAP (= gabungan semua delta)
+    //           "narasi_source": "ai"|"template",
+    //           "narasi_flagged": boolean,     // true = ada angka tak cocok skor/simulasi
+    //           "flagged_reason": string|null,
+    //           "narasi_note": string|null,    // catatan utk ditampilkan bila source=template
+    //           "stop_reason": string|null,    // dari Claude (mis. "end_turn"); null utk template
+    //           "ranking": [ { kelurahan, skor, kecamatan, kelompok_terdampak, rekomendasi_intervensi } ],
+    //           "area_filter": { requested, applied, matched, note },
+    //           "simulasi_dipakai": { penduduk_terlayani_400m, penduduk_terlayani_800m } | null
+    //         }
+    //    3. `event: error` (1 kali, terminal-gagal — MENGGANTIKAN `done`, tidak ada `done` sesudahnya)
+    //         Dikirim HANYA bila stream Claude putus SETELAH beberapa delta terkirim.
+    //         Membawa payload lengkap + narasi template pengganti supaya frontend
+    //         cukup MEMBUANG teks delta yang sudah terkumpul dan memakai `.narasi`:
+    //         {
+    //           "error": string,               // pesan teknis singkat
+    //           "recovered": true,
+    //           "narasi": string,              // narasi TEMPLATE pengganti (pakai ini)
+    //           "narasi_source": "template",
+    //           "narasi_flagged": false,
+    //           "flagged_reason": null,
+    //           "narasi_note": string,
+    //           "stop_reason": null,
+    //           "ranking": [...], "area_filter": {...}, "simulasi_dipakai": ... (sama seperti done)
+    //         }
+    //    Kegagalan PRA-stream (API key kosong / Claude non-OK / fetch gagal) TIDAK
+    //    memakai `event: error` — langsung jalur template: 1 delta besar + `done`
+    //    (narasi_source:"template"). Jadi frontend hanya perlu menangani delta+done,
+    //    plus error sebagai kasus "ganti teks".
+    //
+    //  Contoh mentah (curl -N):
+    //    event: delta
+    //    data: {"text":"Kelurahan Padurenan menempati peringkat 1 "}
+    //
+    //    event: delta
+    //    data: {"text":"dengan skor ketimpangan 0,82..."}
+    //
+    //    event: done
+    //    data: {"narasi":"Kelurahan Padurenan ...","narasi_source":"ai","narasi_flagged":false,...}
+    // ================================================================
+    const stream = new ReadableStream({
+      async start(controller) {
+        // deno-lint-ignore no-explicit-any
+        const send = (event: string, data: any) =>
+          controller.enqueue(sseChunk(event, data));
+
+        // Jalur template lewat SSE yang sama: 1 delta besar + done.
+        const emitTemplate = (note: string | null) => {
+          send("delta", { text: templateNarasi });
+          send("done", {
+            ...doneCommon,
+            narasi: templateNarasi,
+            narasi_source: "template",
+            narasi_flagged: false,
+            flagged_reason: null,
+            narasi_note: note,
+            stop_reason: null,
+          });
+          controller.close();
+        };
+
+        // --- Pra-stream: tidak ada API key -> template ---
+        if (!ANTHROPIC_API_KEY) {
+          emitTemplate(
+            "ANTHROPIC_API_KEY belum diset — narasi disusun dari template deterministik " +
+              "berbasis skor model spasial. Angka & ranking tetap akurat."
+          );
+          return;
+        }
+
+        // --- Buka stream ke Claude Messages API ---
+        let claudeRes: Response;
+        try {
+          claudeRes = await fetch("https://api.anthropic.com/v1/messages", {
+            method: "POST",
+            headers: {
+              "x-api-key": ANTHROPIC_API_KEY,
+              "anthropic-version": "2023-06-01",
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({
+              model: MODEL,
+              // 900 (naik dari 420): dengan streaming, total token TIDAK lagi
+              // menentukan latensi yang dirasakan user (token pertama ~1,5-2s).
+              // 420 dulu memotong ~7/10 narasi jalur simulasi di tengah kalimat
+              // & 3/10 kehilangan angka "+N jiwa" (komponen Measurable SMART).
+              // Target isi 150-220 kata (~300-450 token) + margin aman -> 900.
+              max_tokens: 900,
+              stream: true,
+              // systemPrompt statis -> tandai cacheable (prefix reuse antar-request).
+              system: [
+                {
+                  type: "text",
+                  text: systemPrompt,
+                  cache_control: { type: "ephemeral" },
+                },
+              ],
+              messages: [{ role: "user", content: userContent }],
+            }),
+          });
+        } catch (netErr) {
+          const m = netErr instanceof Error ? netErr.message : String(netErr);
+          console.warn(`[ai-insight] fetch Claude gagal (pra-stream): ${m}`);
+          emitTemplate(
+            "Layanan AI sedang tidak tersedia — narasi disusun dari template deterministik " +
+              "berbasis skor model spasial. Angka & ranking tetap akurat."
+          );
+          return;
+        }
+
+        if (!claudeRes.ok || !claudeRes.body) {
+          let errText = "";
+          try {
+            errText = await claudeRes.text();
+          } catch (_e) {
+            /* body mungkin sudah habis / tidak ada */
+          }
+          console.warn(
+            `[ai-insight] Claude non-OK ${claudeRes.status}: ${errText.slice(0, 300)}`
+          );
+          emitTemplate(
+            "Layanan AI sedang tidak tersedia — narasi disusun dari template deterministik " +
+              "berbasis skor model spasial. Angka & ranking tetap akurat."
+          );
+          return;
+        }
+
+        // --- Parse SSE Anthropic, forward text delta ke browser ---
+        let full = "";
+        let deltaTerkirim = 0;
+        let stopReason: string | null = null;
+        try {
+          const reader = claudeRes.body.getReader();
+          const decoder = new TextDecoder();
+          let buf = "";
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buf += decoder.decode(value, { stream: true });
+            let sep: number;
+            while ((sep = buf.indexOf("\n\n")) !== -1) {
+              const rawEvent = buf.slice(0, sep);
+              buf = buf.slice(sep + 2);
+              const dataStr = rawEvent
+                .split("\n")
+                .filter((l) => l.startsWith("data:"))
+                .map((l) => l.slice(5).trim())
+                .join("");
+              if (!dataStr || dataStr === "[DONE]") continue;
+              // deno-lint-ignore no-explicit-any
+              let evt: any;
+              try {
+                evt = JSON.parse(dataStr);
+              } catch (_e) {
+                continue;
+              }
+              if (
+                evt.type === "content_block_delta" &&
+                evt.delta?.type === "text_delta"
+              ) {
+                const piece: string = evt.delta.text ?? "";
+                if (piece) {
+                  full += piece;
+                  send("delta", { text: piece });
+                  deltaTerkirim++;
+                }
+              } else if (evt.type === "message_delta" && evt.delta?.stop_reason) {
+                stopReason = evt.delta.stop_reason;
+              } else if (evt.type === "error") {
+                throw new Error(
+                  `Claude stream error: ${JSON.stringify(evt.error ?? evt)}`
+                );
+              }
+              // message_start / content_block_start|stop / message_stop / ping: diabaikan
+            }
+          }
+        } catch (streamErr) {
+          const m = streamErr instanceof Error ? streamErr.message : String(streamErr);
+          console.warn(
+            `[ai-insight] stream Claude putus di tengah (${deltaTerkirim} delta terkirim): ${m}`
+          );
+          // Keputusan (didokumentasikan): stream putus SETELAH sebagian delta
+          // terkirim -> kirim `event: error` yang membawa narasi TEMPLATE penuh
+          // + payload done-lengkap. Frontend membuang delta yang sudah terkumpul
+          // dan memakai `.narasi`. Tidak ada `done` sesudah `error`. Tidak perlu
+          // panggilan kedua dari frontend.
+          send("error", {
+            error: m,
+            recovered: true,
+            ...doneCommon,
+            narasi: templateNarasi,
+            narasi_source: "template",
+            narasi_flagged: false,
+            flagged_reason: null,
+            narasi_note:
+              "Koneksi ke layanan AI terputus di tengah proses — narasi diganti " +
+              "template deterministik berbasis skor. Angka & ranking tetap akurat.",
+            stop_reason: null,
+          });
+          controller.close();
+          return;
+        }
+
+        // --- Stream Claude selesai normal ---
+        // Kalau Claude tidak mengirim satu pun teks (mis. langsung stop) —
+        // perlakukan sebagai kegagalan lembut, jatuh ke template.
+        if (deltaTerkirim === 0) {
+          emitTemplate(
+            "Layanan AI tidak mengembalikan teks — fallback ke template deterministik. " +
+              "Angka & ranking tetap akurat."
+          );
+          return;
+        }
+
+        // Validasi anti-halusinasi dijalankan pada teks LENGKAP (akumulasi semua
+        // delta), lalu dikirim di event terminal `done`.
+        const narasi = full.trim();
+        const tokenTidakCocok = extractNumberTokens(narasi).filter(
+          (t) => !tokenCocok(t)
+        );
+        const narasiFlagged = tokenTidakCocok.length > 0;
+        const flaggedReason = narasiFlagged
+          ? `Narasi AI menyebut angka (${tokenTidakCocok.join(", ")}) yang tidak cocok dengan ` +
+            `skor asli maupun angka simulasi What-If manapun dari data (toleransi pembulatan). ` +
+            `Perlu ditinjau manual sebelum dipercaya sepenuhnya.`
+          : null;
+        if (narasiFlagged) {
+          console.warn(
+            `[ai-insight] narasi_flagged=true — angka tidak cocok: ${tokenTidakCocok.join(", ")}`
+          );
+        }
+
+        send("done", {
+          ...doneCommon,
+          narasi,
+          narasi_source: "ai",
+          narasi_flagged: narasiFlagged,
+          flagged_reason: flaggedReason,
+          narasi_note: null,
+          stop_reason: stopReason,
+        });
+        controller.close();
+      },
     });
+
+    return new Response(stream, { headers: sseHeaders });
   } catch (err) {
     console.error(err);
     // err bisa berupa Error biasa, atau object error mentah dari Supabase

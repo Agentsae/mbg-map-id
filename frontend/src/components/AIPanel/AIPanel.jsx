@@ -1,9 +1,14 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { Sparkles, Send, Loader2, AlertTriangle, Info } from 'lucide-react'
-import { supabase, isConfigured } from '../../lib/supabaseClient'
+import { isConfigured } from '../../lib/supabaseClient'
 import { KECAMATAN_KOTA_BEKASI } from '../../lib/kecamatan'
 
 const SEMUA_KECAMATAN = '' // opsi default dropdown -> tidak mengirim area_filter sama sekali
+
+// Nama env var persis mengikuti frontend/src/lib/supabaseClient.js — jangan hardcode key.
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY
+const AI_INSIGHT_ENDPOINT = `${SUPABASE_URL}/functions/v1/ai-insight`
 
 const DEMO_RESPONSE = {
   narasi:
@@ -18,72 +23,195 @@ const DEMO_RESPONSE = {
   ],
 }
 
+// ---------------------------------------------------------------------------
+//  SSE parser — Edge Function ai-insight streaming (kontrak di index.ts ~649).
+//  fetch() langsung (bukan supabase.functions.invoke, yang tidak bisa membaca
+//  stream). Cek res.ok DULU: non-200 = JSON biasa { error }. Kalau 200,
+//  res.body dibaca sebagai text/event-stream: split blok pada "\n\n", tiap blok
+//  punya baris `event:` dan satu/lebih baris `data:` (digabung sebelum
+//  JSON.parse). Chunk yang terpotong di batas buffer ditahan sampai lengkap.
+// ---------------------------------------------------------------------------
+async function streamAiInsight(body, { onDelta, onDone, onError }) {
+  const res = await fetch(AI_INSIGHT_ENDPOINT, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+      apikey: SUPABASE_ANON_KEY,
+    },
+    body: JSON.stringify(body),
+  })
+
+  // Non-200 -> body JSON biasa { error }. Jangan coba baca stream.
+  if (!res.ok) {
+    let message = `Permintaan gagal (HTTP ${res.status})`
+    try {
+      const j = await res.json()
+      if (j && typeof j.error === 'string' && j.error.trim()) message = j.error
+    } catch {
+      // body bukan JSON — pakai pesan default di atas
+    }
+    const err = new Error(message)
+    err.handled = true
+    throw err
+  }
+
+  if (!res.body) throw new Error('Respons streaming kosong dari server.')
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  const handleBlock = (rawBlock) => {
+    const block = rawBlock.replace(/\r/g, '')
+    if (!block.trim()) return
+    let eventName = 'message'
+    const dataLines = []
+    for (const line of block.split('\n')) {
+      if (line.startsWith('event:')) eventName = line.slice(6).trim()
+      else if (line.startsWith('data:')) dataLines.push(line.slice(5).replace(/^ /, ''))
+    }
+    if (dataLines.length === 0) return
+    let payload
+    try {
+      payload = JSON.parse(dataLines.join('\n'))
+    } catch {
+      return // blok data tidak valid — abaikan, jangan crash
+    }
+    if (eventName === 'delta') onDelta(payload)
+    else if (eventName === 'done') onDone(payload)
+    else if (eventName === 'error') onError(payload)
+  }
+
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    let sep
+    while ((sep = buffer.indexOf('\n\n')) !== -1) {
+      const rawBlock = buffer.slice(0, sep)
+      buffer = buffer.slice(sep + 2)
+      handleBlock(rawBlock)
+    }
+  }
+  // Flush sisa buffer (blok terakhir tanpa "\n\n" penutup)
+  buffer += decoder.decode()
+  if (buffer.trim()) handleBlock(buffer)
+}
+
 export default function AIPanel({ latestSimulasi = null }) {
   const [query, setQuery] = useState('')
   const [areaFilter, setAreaFilter] = useState(SEMUA_KECAMATAN)
   const [messages, setMessages] = useState([])
   const [loading, setLoading] = useState(false)
+  const inFlight = useRef(false)
+
+  // Patch pesan AI terakhir (placeholder streaming) tanpa menyentuh pesan lain.
+  function patchLastAi(patch) {
+    setMessages((prev) => {
+      const next = [...prev]
+      for (let i = next.length - 1; i >= 0; i--) {
+        if (next[i].role === 'ai') {
+          next[i] = { ...next[i], ...(typeof patch === 'function' ? patch(next[i]) : patch) }
+          break
+        }
+      }
+      return next
+    })
+  }
+
+  // Terapkan payload terminal (done ATAU error) — timpa teks streaming dengan
+  // narasi kanonik dari server, simpan metadata. Untuk `event: error`, server
+  // sudah mengirim narasi TEMPLATE pengganti + recovered:true; buang teks delta
+  // yang sempat terkumpul dan render data.narasi.
+  function applyTerminal(data) {
+    const area = data.area_filter || {}
+    patchLastAi({
+      text: data.narasi,
+      streaming: false,
+      ranking: data.ranking || null,
+      flagged: Boolean(data.narasi_flagged),
+      flaggedReason: data.flagged_reason || null,
+      templateNarasi: data.narasi_source === 'template',
+      narasiNote: data.narasi_note || null,
+      // BARU: kecamatan diminta tapi tidak dikenali -> diam-diam fallback ke
+      // seluruh kota. QA menemukan 8/12 kecamatan kena ini tanpa jejak ke user.
+      areaMismatch: area.requested != null && area.matched === false,
+      areaRequested: area.requested != null ? area.requested : null,
+    })
+  }
 
   async function handleAsk() {
-    if (!query.trim() || loading) return
+    if (!query.trim() || loading || inFlight.current) return
+    inFlight.current = true
     const userQuery = query.trim()
     const areaLabel = areaFilter || 'Semua Kecamatan'
-    setMessages((prev) => [...prev, { role: 'user', text: userQuery, area: areaLabel }])
+    setMessages((prev) => [
+      ...prev,
+      { role: 'user', text: userQuery, area: areaLabel },
+      { role: 'ai', text: '', streaming: true },
+    ])
     setQuery('')
     setLoading(true)
 
     try {
-      let result
-      if (isConfigured) {
-        // area_filter hanya disertakan kalau user memilih kecamatan tertentu
-        // (bukan "Semua Kecamatan") -- nama field harus persis `area_filter`
-        // supaya cocok dengan parameter yang dibaca Edge Function ai-insight.
-        const body = { query: userQuery }
-        if (areaFilter) body.area_filter = areaFilter
-        // Kalau user sudah menjalankan simulasi What-If di sesi ini, teruskan
-        // output simulate_new_stop terakhir sebagai body.simulasi — Edge
-        // Function ai-insight (opsional, backward-compatible) memakainya supaya
-        // tahap Action narasi CCIA bisa mengutip "+N jiwa" riil, bukan angka
-        // karangan. Tidak ada yang rusak kalau field ini absen.
-        if (latestSimulasi) body.simulasi = latestSimulasi
-
-        const { data, error } = await supabase.functions.invoke('ai-insight', {
-          body,
-        })
-        if (error) throw error
-        result = data
-      } else {
-        // Fallback demo — supaya UI tetap bisa dicoba sebelum Edge Function live
+      if (!isConfigured) {
+        // Fallback demo — supaya UI tetap bisa dicoba sebelum Edge Function live.
+        // Jangan fetch sama sekali kalau Supabase belum tersambung.
         await new Promise((r) => setTimeout(r, 600))
-        result = DEMO_RESPONSE
+        patchLastAi({
+          text: DEMO_RESPONSE.narasi,
+          streaming: false,
+          ranking: DEMO_RESPONSE.ranking,
+        })
+        return
       }
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: 'ai',
-          text: result.narasi,
-          ranking: result.ranking,
-          // narasi_flagged: true saat Edge Function ai-insight mendeteksi narasi
-          // menyebut angka yang tidak cocok dengan skor manapun di data (indikasi
-          // halusinasi AI). Wajib ditampilkan ke user — lihat prinsip inti
-          // "setiap skor harus bisa ditelusuri" (CLAUDE.md).
-          flagged: Boolean(result.narasi_flagged),
-          flaggedReason: result.flagged_reason,
-          // narasi_source: 'template' -> narasi disusun Edge Function dari
-          // template deterministik (skor model spasial) karena layanan AI tidak
-          // tersedia. Angka & ranking tetap valid; tampilkan catatan netral,
-          // BUKAN peringatan halusinasi seperti `flagged`.
-          templateNarasi: result.narasi_source === 'template',
-          narasiNote: result.narasi_note,
+
+      // area_filter hanya disertakan kalau user memilih kecamatan tertentu
+      // (nama field harus persis `area_filter`). simulasi = output mentah RPC
+      // simulate_new_stop terakhir, supaya tahap Action narasi CCIA bisa
+      // mengutip "+N jiwa" riil. Keduanya opsional & backward-compatible.
+      const body = { query: userQuery }
+      if (areaFilter) body.area_filter = areaFilter
+      if (latestSimulasi) body.simulasi = latestSimulasi
+
+      let terminalSeen = false
+      await streamAiInsight(body, {
+        onDelta: (d) => {
+          if (typeof d.text !== 'string') return
+          patchLastAi((m) => ({ text: m.text + d.text, streaming: true }))
         },
-      ])
+        onDone: (d) => {
+          terminalSeen = true
+          applyTerminal(d)
+        },
+        onError: (d) => {
+          terminalSeen = true
+          applyTerminal(d) // d.narasi = template pengganti, d.narasi_source = "template"
+        },
+      })
+
+      // Stream selesai tanpa event terminal (putus di tengah) — jangan biarkan
+      // bubble menggantung dengan teks parsial tanpa penanda.
+      if (!terminalSeen) {
+        patchLastAi((m) => ({
+          streaming: false,
+          text:
+            m.text ||
+            'Koneksi ke AI Insight terputus sebelum analisis selesai. Coba ulangi pertanyaan.',
+          isError: !m.text,
+        }))
+      }
     } catch (err) {
-      setMessages((prev) => [
-        ...prev,
-        { role: 'ai', text: `Terjadi kendala memanggil AI Insight: ${err.message}`, isError: true },
-      ])
+      patchLastAi({
+        text: `Terjadi kendala memanggil AI Insight: ${err.message}`,
+        streaming: false,
+        isError: true,
+      })
     } finally {
       setLoading(false)
+      inFlight.current = false
     }
   }
 
@@ -149,7 +277,32 @@ export default function AIPanel({ latestSimulasi = null }) {
                   </div>
                 </div>
               )}
-              {m.text}
+              {m.role === 'ai' && m.areaMismatch && (
+                <div className="mb-2 flex items-start gap-1.5 rounded-md border border-slate-300 bg-slate-50 px-2 py-1.5 text-left text-slate-600">
+                  <Info size={14} className="mt-0.5 shrink-0" />
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-wide">
+                      Filter kecamatan diabaikan
+                    </p>
+                    <p className="text-xs mt-0.5">
+                      Filter kecamatan "{m.areaRequested}" tidak dikenali — analisis menampilkan
+                      seluruh Kota Bekasi.
+                    </p>
+                  </div>
+                </div>
+              )}
+              {m.role === 'ai' && m.streaming && !m.text ? (
+                <span className="flex items-center gap-2 text-slate-400">
+                  <Loader2 size={14} className="animate-spin" /> Menyusun analisis…
+                </span>
+              ) : (
+                <span className="whitespace-pre-wrap">
+                  {m.text}
+                  {m.role === 'ai' && m.streaming && (
+                    <span className="ml-0.5 inline-block h-3.5 w-1.5 translate-y-0.5 animate-pulse bg-slate-400" />
+                  )}
+                </span>
+              )}
               {m.ranking && (
                 <ul className="mt-2 space-y-1 text-xs">
                   {m.ranking.map((r, idx) => (
@@ -163,11 +316,6 @@ export default function AIPanel({ latestSimulasi = null }) {
             </div>
           </div>
         ))}
-        {loading && (
-          <div className="flex items-center gap-2 text-sm text-slate-400">
-            <Loader2 size={14} className="animate-spin" /> Menghitung skor & menyusun narasi...
-          </div>
-        )}
       </div>
 
       <div className="px-3 pt-2 border-t border-slate-200">
@@ -207,7 +355,7 @@ export default function AIPanel({ latestSimulasi = null }) {
           disabled={loading}
           className="bg-brand-blue text-white rounded-md px-3 py-2 disabled:opacity-50"
         >
-          <Send size={16} />
+          {loading ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
         </button>
       </div>
     </div>
