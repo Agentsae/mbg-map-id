@@ -7,12 +7,15 @@ import { MousePointerClick, Users, Clock, School, HeartPulse, Play } from 'lucid
 // yang SAMA dengan klik peta — acceptance criteria Bab 8 sudah terpenuhi lewat
 // klik, ini murni pemandu presentasi. Koordinat = titik referensi umum Kota
 // Bekasi (bukan hasil analisis skor).
+// Catatan 2026-09-05: hanya 3 preset — sebelumnya ada 5, tapi 'mustikajaya'
+// (~2.764 m di luar batas) dan 'rawalumbu' (~768 m di luar batas) dihapus
+// setelah point-in-polygon check terhadap frontend/src/data/bekasi_boundary.geojson
+// menunjukkan koordinatnya jatuh di luar batas Kota Bekasi. Jangan ganti dengan
+// preset baru tanpa verifikasi in-boundary yang sama.
 const PRESET_SKENARIO = [
-  { id: 'mustikajaya', label: 'Halte baru — Mustika Jaya (kawasan transit desert)', lat: -6.2989, lon: 107.0658 },
   { id: 'bantargebang', label: 'Halte baru — Bantargebang (sekitar TPA)', lat: -6.3130, lon: 106.9990 },
   { id: 'terminalbekasi', label: 'Halte baru — Terminal Bekasi', lat: -6.2603, lon: 107.0024 },
   { id: 'summarecon', label: 'Halte baru — Summarecon Bekasi', lat: -6.2285, lon: 107.0080 },
-  { id: 'rawalumbu', label: 'Halte baru — Perumahan Rawalumbu', lat: -6.2825, lon: 107.0450 },
 ]
 
 /**

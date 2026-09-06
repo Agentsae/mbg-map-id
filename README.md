@@ -57,6 +57,10 @@ pip install -r requirements.txt
 
 > **Penting:** API key & konfigurasi disimpan di **backend/Edge Function**, jangan pernah pakai prefix `VITE_` untuk key rahasia (Anthropic, service role) — itu akan ter-bundel ke JS publik. Lihat `.env.example` dan `.gitignore`.
 
+### Login wall internal (opsional, default OFF)
+
+Ada gerbang login Supabase Auth (email+password, single-role Dishub/Bappeda) yang dikunci di belakang flag `VITE_AUTH_REQUIRED`. Default **OFF** — aplikasi terbuka tanpa login (dipakai untuk submission WebGIS). Set `VITE_AUTH_REQUIRED=true` di environment frontend (lokal `frontend/.env`, atau Environment Variables di dashboard Vercel) untuk menyalakannya; akun staf dibuat manual lewat Supabase Dashboard karena tidak ada signup di UI. Ini hanya proteksi level UI, bukan perubahan RLS.
+
 ## 📌 Milestone
 - Survei lapangan: 7–20 Agu 2026
 - Pengolahan data + AHP: 14–27 Agu 2026

@@ -15,12 +15,16 @@ Hasil audit PRD final (`docs/MBG_PRD_GeoTransitInsight.pdf` hal. 1–22) vs kode
 Diurutkan: acceptance criteria Bab 8 dulu, lalu metodologi, desain, wireframe, terjadwal.
 Yang sudah ADA di fase-fase di bawah tidak diulang di sini — ini yang belum tercatat / belum jelas statusnya.
 
+**Update 5 Sep 2026 (product-analyst):** 4 dari 5 item di bagian A sudah dibangun & diverifikasi lewat
+commit `dcd7dcb` (3 Sep, "TDI panel, Export Report, real coverage, dashboard cards, off-grid states")
++ migration `019`/`024`. Hanya item AI Claude riil (< 5 detik) yang masih blocked oleh billing Anthropic.
+
 ### A. Acceptance Criteria (Bab 8) belum terpenuhi penuh
-- [ ] **Export Report (PDF/gambar)** — Bab 8 + User Flow Bab 10.1 (langkah terakhir) + In-Scope Bab 3.1. Sekarang tab "Data & Laporan" = placeholder `ComingSoon`. (juga tercatat di Fase 5)
-- [ ] **TDI klik-untuk-rincian** — Bab 8: "CAI **& TDI** — tiap lokasi tampilkan skor + rincian kontribusi tiap kriteria saat diklik". Sekarang hanya CAI (`CaiScorePanel.jsx`). TDI cuma choropleth di Analisis Spasial, tidak ada breakdown per sel (Kepadatan × Indeks Kebutuhan Mobilitas ÷ Skor Aksesibilitas Transit).
-- [ ] **Dashboard "coverage ratio per kecamatan" masih data demo** — `Dashboard.jsx` sengaja `usingDemo=true` permanen + render `DEMO_DATA` 6 kecamatan hardcoded walau Supabase tersambung ("agregasi coverage ratio asli per kecamatan belum diimplementasikan"). Bab 8: "dari data yang telah divalidasi".
-- [ ] **Transit Equity Index — `kelompok_terdampak` + `rekomendasi_intervensi` NULL untuk 53/56 kelurahan** — migration `014_equity_kelompok_rekomendasi_isi.sql` sudah dibuat tapi **belum di-`db push`**. Bab 8 wajib keduanya per kelurahan. (juga tercatat di Fase 4)
-- [ ] **AI Spatial Consultant < 5 detik** — jalur Claude riil belum teruji end-to-end (billing Anthropic belum aktif). Fallback template sudah jalan. (juga di Fase 3)
+- [x] **Export Report (PDF/gambar)** — tab "Data & Laporan" tidak lagi `ComingSoon`. `DataLaporan.jsx` (commit `dcd7dcb`) sudah menghasilkan PDF (jsPDF, `doc.addImage` kanvas peta) dan PNG (canvas 2D manual) berisi peta + indikator kunci (ringkasan kota, transit desert, coverage ratio, Top-5 Transit Equity Index) dengan fallback data contoh yang ditandai eksplisit `[contoh]` bila Supabase belum tersambung. Baca hasil siap pakai (`grid_analisis`, `coverage_transit_kecamatan`, `skor_equity`), tidak menghitung ulang formula apa pun.
+- [x] **TDI klik-untuk-rincian** — `TdiScorePanel.jsx` (commit `dcd7dcb`) muncul saat klik sel choropleth TDI di Analisis Spasial, menampilkan skor + rincian tiap komponen formula (`Kepadatan`, `Indeks Kebutuhan Mobilitas`, `Skor Aksesibilitas Transit` — ditandai peran pembilang/penyebut, bukan model bobot linear seperti CAI) via RPC `get_tdi_breakdown` (migration `015`, disempurnakan `021` untuk titik di luar cakupan grid). Sekarang CAI **dan** TDI sama-sama punya panel rincian per kriteria — acceptance criteria Bab 8 terpenuhi untuk keduanya.
+- [x] **Dashboard "coverage ratio per kecamatan"** — `Dashboard.jsx` (commit `dcd7dcb`) tidak lagi `usingDemo=true` permanen: query nyata ke view `coverage_transit_kecamatan` (migration `016`/`017`), `usingDemo` jadi state yang otomatis `false` kalau view terisi & query berhasil, fallback `DEMO_DATA` hanya kalau Supabase belum tersambung/view kosong. Badge "demo" per kartu ditampilkan kalau memang masih pakai fallback (transparan ke user, bukan menyembunyikan status data).
+- [x] **Transit Equity Index — `kelompok_terdampak` + `rekomendasi_intervensi`** — migration `019_equity_kelompok_rekomendasi_refill_ahp.sql` sudah **di-`db push`** (menggantikan `014` yang sempat tertunda) dan diverifikasi lewat guard SQL internal (`raise exception` kalau ada baris REAL yang masih NULL / jumlah baris terisi ≠ 56) — sudah lolos. Migration `024_equity_rekomendasi_retier_ahp.sql` menyusul memperbaiki 2 kelurahan (Cimuning, Jatirangga) yang naik ke 10-besar pasca-recompute AHP tapi masih membawa teks ringkas gaya "11-56" — sekarang seluruh 10-besar AHP terkini membawa rekomendasi SMART Spasial (>200 karakter, koridor/jarak/jadwal konkret), juga dijaga guard SQL. 56/56 kelurahan REAL terisi kedua kolom.
+- [ ] **AI Spatial Consultant < 5 detik** — **MASIH BLOCKED.** Jalur Claude riil belum teruji end-to-end karena billing Anthropic belum terkonfirmasi aktif (`ai-insight` sempat HTTP 500 "credit balance too low"). Fallback narasi template deterministik (CCIA) sudah jalan dan diverifikasi, tapi itu bukan pengganti pengujian acceptance criteria kecepatan Claude asli. (juga di Fase 3 — jangan tandai selesai sampai billing aktif dan diukur langsung oleh `qa-tester`)
 
 ### B. Metodologi (Bab 7) baru sebagian
 - [ ] **Narasi AI jalur LLM belum ikut kerangka CCIA / SMART Spasial (Bab 7.5)** — `systemPrompt` di `ai-insight/index.ts` cuma "jelaskan skor… maksimal 4 kalimat", tanpa struktur Condition→Cause→Impact→Action dan tanpa instruksi SMART Spasial. Hanya fallback template deterministik (`buildTemplateNarasi`) yang sudah CCIA. Tambahan: tahap Action tidak bisa "SMART Spasial" dengan angka "+N jiwa" riil karena `ai-insight` tidak pernah menerima output simulasi What-If — cuma meneruskan teks `rekomendasi_intervensi` dari DB.
@@ -30,13 +34,12 @@ Yang sudah ADA di fase-fase di bawah tidak diulang di sini — ini yang belum te
 
 ### D. Elemen wireframe (Bab 10.2 / Gambar 6) — prioritas lebih rendah
 - [ ] **Simulasi Skenario** wireframe pakai "dropdown pilihan skenario"; build sekarang klik-peta saja. Acceptance criteria tetap terpenuhi lewat alur klik. (juga di Fase 1)
-- [ ] **Kartu dashboard dari mockup belum ada:** "Usulan Halte Prioritas" dan "Top 3 Rekomendasi AI" (skor dampak / potensi manfaat / estimasi biaya).
-- [ ] **Data & Laporan + Pengaturan** placeholder — PRD hal. 18–19 sendiri sudah mengakui ini "placeholder/finishing".
+- [x] **Kartu dashboard dari mockup:** "Usulan Halte Prioritas" dan "Top 3 Rekomendasi AI" — sudah ada di `Dashboard.jsx` (commit `dcd7dcb`). "Usulan Halte Prioritas" = jumlah `titik_kandidat` + titik CAI tertinggi (query real, fallback demo). "Top 3 Rekomendasi AI" = 3 kelurahan `skor_equity` paling timpang (`ranking` 1–3, filter `sumber ILIKE 'REAL%'`) + `rekomendasi_intervensi`-nya; skor dampak = `skor_final` ketimpangan. Catatan: kolom "potensi manfaat" & "estimasi biaya" dari mockup **belum ada** di skema — kartu menampilkan "belum tersedia di data" secara eksplisit alih-alih mengarang angka. Cukup untuk acceptance criteria Bab 8, belum replikasi visual 1:1 mockup.
+- [ ] **Halaman "Pengaturan"** masih placeholder — prioritas rendah dibanding 5 fitur inti Bab 8. ("Data & Laporan" **sudah keluar dari status placeholder**, lihat Export Report di bagian A.)
 
-### E. Terjadwal, belum mulai
-- [ ] **Fase 4 — swap data asli**: upload data kependudukan/POI/halte riil + hitung ulang CAI/TDI/Equity dengan bobot final `konfigurasi_bobot`.
-  - **Update 2026-09-03:** bobot final `konfigurasi_bobot` = hasil AHP pairwise Saaty formal (sesi 2026-09-03, CR CAI 0,0226 / TDI_MOBILITAS 0,0000 / EQUITY 0,0457, semua < 0,1), applied via migration `018`/`019`. Recompute skor CAI/TDI/Equity + refill `kelompok_terdampak`/`rekomendasi_intervensi` menyusul via ETL + migration 019, rollout DB dituntaskan paralel oleh `data-ai-analyst`. Ini menggantikan status "direview mentor 27 Agu, bukan AHP formal" yang tercatat di draft checklist sebelumnya.
-- [ ] **Fase 6 — deployment**: deploy Vercel Pro, subdomain MAPID + CNAME, uji akses eksternal, rekam video demo — semua perlu untuk submission WebGIS **13 Sep**.
+### E. Terjadwal
+- [~] **Fase 4 — swap data asli**: MAYORITAS TUNTAS, lihat detail di Fase 4 di bawah (migration `018`/`019`/`024` sudah `db push`). Sisa: re-validasi kecepatan dengan volume data asli + 15 titik traffic counting tambahan (KND-010..KND-024) masih menunggu rekan tim, koordinat masih estimasi.
+- [ ] **Fase 6 — deployment**: **NOL PROGRES** — tidak ada jejak commit/config (`vercel.json`, CNAME, subdomain) di repo. Risiko jalur kritis paling nyata sekarang; lihat breakdown di Fase 6 di bawah. Harus mulai segera, jangan tunggu mendekati submission WebGIS **13 Sep**.
 
 ### Bukan gap (sudah diverifikasi 1 Sep)
 RLS aktif di 10/10 tabel (termasuk `rute_transit_eksisting` di migration 013) · MapLibre + Claude Haiku 4.5 + basemap MAPID sesuai Bab 9 · isochrone = buffer radius 400/800 m sesuai Bab 7.2 + catatan out-of-scope · `simulate_new_stop` < 3 dtk & klik CAI < 2 dtk sudah diukur.
@@ -77,22 +80,27 @@ RLS aktif di 10/10 tabel (termasuk `rute_transit_eksisting` di migration 013) ·
 
 ## Fase 4 — Swap ke data asli (🟡 mulai begitu data processing selesai, ~31 Agu–6 Sep)
 
-- [ ] Upload hasil olahan data kependudukan/POI/halte ke tabel Supabase (ganti data sintetis)
-- [~] Hitung ulang CAI/TDI/Transit Equity Index dengan bobot final `konfigurasi_bobot` — bobot AHP pairwise Saaty formal (sesi 2026-09-03, CR: CAI 0,0226 / TDI_MOBILITAS 0,0000 / EQUITY 0,0457, semua < 0,1) diterapkan via `018_konfigurasi_bobot_ahp_final.sql`; recompute skor + isi ulang `kelompok_terdampak`/`rekomendasi_intervensi` via `019_equity_kelompok_rekomendasi_refill_ahp.sql` — applied via migration 018/019 (2026-09-03), rollout DB tuntas paralel oleh `data-ai-analyst`. Menggantikan worksheet review mentor 27 Agu. Lihat CLAUDE.md + `docs/VALIDASI_BOBOT_AHP.md` Bagian 0.
-- [~] Isi Transit Equity Index Dashboard dengan ranking 5+ kelurahan asli beserta rekomendasi intervensi (ranking 1 = `skor_final` TERTINGGI = kelurahan paling tertinggal/butuh intervensi — lihat catatan arah skala di CLAUDE.md bagian Struktur Data, jangan urutkan terbalik) — ranking 56 kelurahan + skor + rincian kriteria SUDAH ADA & arah skala benar (Arenjaya #1). `kelompok_terdampak` + `rekomendasi_intervensi` sebelumnya NULL semua → migration `014_equity_kelompok_rekomendasi_isi.sql` dibuat 28 Agu (deterministik dari dimensi kerentanan, ditelusuri), **menunggu review + `db push`**
-- [ ] Re-validasi acceptance criteria kecepatan dengan volume data asli (bisa beda dari data dummy yang lebih kecil)
+- [~] Upload hasil olahan data kependudukan/POI/halte ke tabel Supabase (ganti data sintetis) — populasi (56 baris `penduduk`), 15 halte BisKita tersurvei, 31 titik Survey Activities + 3 Struk Go sudah masuk. Yang masih menunggu: **15 titik traffic counting tambahan (KND-010..KND-024)** — koordinat masih estimasi, menunggu rekan tim (bukan blocker kode).
+- [x] Hitung ulang CAI/TDI/Transit Equity Index dengan bobot final `konfigurasi_bobot` — bobot AHP pairwise Saaty formal (sesi 2026-09-03, CR: CAI 0,0226 / TDI_MOBILITAS 0,0000 / EQUITY 0,0457, semua < 0,1) diterapkan via `018_konfigurasi_bobot_ahp_final.sql` (diverifikasi: 13 baris, `numeric(6,4)`, tiap kelompok kriteria berjumlah 1,0000); recompute skor + isi ulang `kelompok_terdampak`/`rekomendasi_intervensi` via `019_equity_kelompok_rekomendasi_refill_ahp.sql` (guard SQL internal memastikan 56/56 baris REAL terisi kedua kolom, gagal migrasi kalau tidak) + `024_equity_rekomendasi_retier_ahp.sql` (retier 2 kelurahan yang naik ke 10-besar pasca-recompute tapi masih bertekstur ringkas). **Sudah `db push`, bukan lagi menunggu.** Menggantikan worksheet review mentor 27 Agu. Lihat CLAUDE.md + `docs/VALIDASI_BOBOT_AHP.md` Bagian 0.
+- [x] Isi Transit Equity Index Dashboard dengan ranking 5+ kelurahan asli beserta rekomendasi intervensi (ranking 1 = `skor_final` TERTINGGI = kelurahan paling tertinggal/butuh intervensi — lihat catatan arah skala di CLAUDE.md bagian Struktur Data, jangan urutkan terbalik) — ranking 56 kelurahan + skor + rincian kriteria + arah skala benar (Arenjaya #1) SUDAH ADA. `kelompok_terdampak` + `rekomendasi_intervensi` — migration `019` (28 Agu → di-`db push` 3 Sep, menggantikan `014` yang tertunda) + `024` sudah mengisi **56/56 kelurahan REAL**, diverifikasi via guard SQL (bukan cuma "terlihat jalan").
+- [ ] Re-validasi acceptance criteria kecepatan dengan volume data asli (bisa beda dari data dummy yang lebih kecil) — **belum ada konfirmasi ulang pasca-swap AHP**; ukuran Fase 2 (filter <2 dtk, simulasi <3 dtk) diukur sebelum recompute 018/019, perlu di-re-run oleh `qa-tester` dengan data terkini.
 
 ## Fase 5 — Fitur pendukung & finishing (🟢 kapan saja, prioritas rendah)
 
-- [ ] Export Report (PDF/gambar) — fitur "boleh hilang duluan" kalau waktu mepet (sesuai Bab 2 "Uji Hapus 50% Fitur": CAI wajib dipertahankan, fitur lain lebih fleksibel)
-- [ ] Halaman "Data & Laporan" dan "Pengaturan" di sidebar — prioritas rendah dibanding 5 fitur inti Bab 8
+- [x] Export Report (PDF/gambar) — tab "Data & Laporan" (`DataLaporan.jsx`, commit `dcd7dcb`) sudah menghasilkan PDF & PNG berisi peta + indikator kunci, bukan lagi `ComingSoon`. Lihat rincian di bagian "Gap PRD" bagian A di atas.
+- [ ] Halaman "Pengaturan" di sidebar — masih placeholder, prioritas rendah dibanding 5 fitur inti Bab 8. ("Data & Laporan" sudah selesai, lihat poin di atas.)
 
 ## Fase 6 — Deployment (🟡 mulai awal September, JANGAN mepet ke 13 Sep)
 
-- [ ] Deploy ke Vercel Pro (frontend) — PRD eksplisit bilang jangan tunggu mendekati deadline
-- [ ] Ajukan subdomain resmi WebGIS MAPID, arahkan CNAME ke Vercel
-- [ ] Uji akses dari luar (bukan cuma localhost) — pastikan juri/mentor bisa buka
-- [ ] Rekam video demo (alur: gap analysis → AI Spatial Consultant → simulasi → Transit Equity Index)
+**Status 5 Sep 2026: NOL PROGRES.** Tidak ada commit, `vercel.json`, atau dokumen terkait deployment di repo manapun. Ini fase dengan risiko jalur kritis tertinggi saat ini — sisa waktu ke submission WebGIS 13 Sep sangat sempit kalau baru dimulai sekarang. Breakdown actionable (bukan sekadar checkbox kosong):
+
+- [ ] **6.1 Setup Vercel Pro** — hubungkan repo GitHub (privat) ke project Vercel, set environment variables frontend (`VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` — **pastikan TIDAK ada `VITE_ANTHROPIC_API_KEY`**), pastikan `npm run build` hijau di environment Vercel (bukan cuma lokal).
+- [ ] **6.2 Deploy awal + smoke test di preview URL Vercel** — cek semua 8 menu sidebar render, panggilan Supabase (REST + RPC + Edge Function `ai-insight`) berhasil dari domain Vercel (bukan localhost — origin baru bisa kena CORS/RLS berbeda).
+- [ ] **6.3 Ajukan subdomain resmi WebGIS MAPID** — koordinasi ke pihak MAPID untuk subdomain, siapkan CNAME record mengarah ke Vercel; ini butuh proses eksternal yang bisa makan waktu tunggu — ajukan paling awal, jangan di H-1.
+- [ ] **6.4 Arahkan CNAME + verifikasi domain custom di Vercel** — setelah subdomain aktif, test ulang smoke test 6.2 di domain publik (bukan `*.vercel.app`).
+- [ ] **6.5 Uji akses eksternal dari luar jaringan tim** — idealnya minta 1 orang di luar tim (bukan di jaringan/device yang sama) buka link dan coba tiap fitur; konfirmasi tidak ada dependency ke `localhost`/IP lokal manapun yang ketinggalan di kode.
+- [ ] **6.6 Rekam video demo** — alur: gap analysis (Peta Multi-Layer) → klik CAI/TDI rincian → AI Spatial Consultant → Simulasi What-If → Transit Equity Index Dashboard → Export Report. Rekam SETELAH 6.4/6.5 lolos (demo di domain publik final, bukan localhost) supaya tidak perlu rekam ulang kalau ada isu deployment last-minute.
+- [ ] **6.7 Submission WebGIS 13 Sep** — paket akhir: link publik + video + code (sesuai instruksi submission), cross-check semua item Bab 8 acceptance criteria sekali lagi sebelum kirim.
 
 ---
 

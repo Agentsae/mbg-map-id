@@ -8,6 +8,7 @@ import {
   Lightbulb,
   FileDown,
   Settings,
+  LogOut,
 } from 'lucide-react'
 import MapView from './components/Map/MapView'
 import CaiScorePanel from './components/Map/CaiScorePanel'
@@ -18,7 +19,8 @@ import SimulationPanel from './components/SimulationMode/SimulationPanel'
 import Dashboard from './components/Dashboard/Dashboard'
 import EquityIndexView from './components/EquityIndexView/EquityIndexView'
 import DataLaporan from './components/DataLaporan/DataLaporan'
-import ComingSoon from './components/ComingSoon/ComingSoon'
+import LoginPage from './components/Auth/LoginPage'
+import Pengaturan from './components/Pengaturan/Pengaturan'
 import { supabase, isConfigured } from './lib/supabaseClient'
 import { extractLatLon, extractLineStringCoords, findNearestPoint } from './lib/geo'
 import { isSurveyPlaceholderPoint } from './lib/titikKandidat'
@@ -45,10 +47,17 @@ const bekasiBoundary = JSON.parse(bekasiBoundaryRaw)
 const biskitaKoridorOsm = JSON.parse(biskitaKoridorOsmRaw)
 const biskitaHalteOsm = JSON.parse(biskitaHalteOsmRaw)
 
+// Feature flag login wall — OFF by default. Auth gate (LoginPage) hanya
+// dipasang kalau VITE_AUTH_REQUIRED === 'true' DI SAMPING isConfigured.
+// Submission WebGIS 13 Sep di-ship dengan flag OFF (akses tanpa login);
+// login wall internal dinyalakan pasca-13 Sep cukup dengan set env var,
+// tanpa ubah kode. Nilai selain string 'true' (termasuk unset) = OFF.
+const AUTH_REQUIRED = import.meta.env.VITE_AUTH_REQUIRED === 'true'
+
 // 8 menu sidebar sesuai wireframe resmi PRD (Gambar 3, lihat CLAUDE.md).
-// Menu yang belum punya komponen nyata dipetakan ke ComingSoon di bawah —
-// jangan ditinggal jadi link mati, tapi juga jangan dibangun lebih dulu
-// dari jadwal fase (lihat docs/BUILD_CHECKLIST.md).
+// Seluruh 8 menu kini punya komponen nyata (ComingSoon/../ComingSoon.jsx
+// disisakan sebagai placeholder generik untuk menu masa depan kalau
+// dibutuhkan lagi, tidak dipakai aktif saat ini).
 const TABS = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'peta', label: 'Peta Interaktif', icon: MapIcon },
@@ -290,7 +299,46 @@ const BISKITA_HALTE_OSM_POPUP_HTML = [
   escapeHtml(biskitaHalteOsm?.properties?.sumber || ''),
 ].filter(Boolean).join('<br/>')
 
+// Auth gate sederhana single-role (Dishub/Bappeda staf) — Supabase Auth
+// email+password, TANPA role/permission berjenjang dan TANPA UI signup
+// (akun staf dibuat lewat Supabase Dashboard, lihat catatan di README/laporan
+// task). Ini hanya proteksi di level UI (siapa yang boleh MEMBUKA aplikasi),
+// BUKAN perubahan RLS — SELECT publik di Supabase tetap seperti semula
+// (lihat CLAUDE.md, migration 002_rls_policies.sql).
+//
+// Kalau Supabase belum dikonfigurasi (`isConfigured` false), auth gate ini
+// SENGAJA dilewati (langsung render app) supaya mode demo tanpa .env tetap
+// bisa dijalankan untuk development/demo cepat — konsisten dengan pola
+// isConfigured di seluruh komponen lain.
+//
+// Kalau AUTH_REQUIRED false (default), hook ini SHORT-CIRCUIT total: tidak
+// ada panggilan supabase.auth.getSession()/onAuthStateChange, session tetap
+// null, authLoading langsung false — jadi tidak ada network call auth mubazir
+// saat login wall dimatikan untuk submission.
+function useAuthSession() {
+  const [session, setSession] = useState(null)
+  const [authLoading, setAuthLoading] = useState(AUTH_REQUIRED && isConfigured)
+
+  useEffect(() => {
+    if (!AUTH_REQUIRED || !isConfigured) return
+
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session)
+      setAuthLoading(false)
+    })
+
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      setSession(newSession)
+    })
+
+    return () => listener.subscription.unsubscribe()
+  }, [])
+
+  return { session, authLoading }
+}
+
 export default function App() {
+  const { session, authLoading } = useAuthSession()
   const [activeTab, setActiveTab] = useState('peta')
 
   // --- Simulasi What-If ---
@@ -663,6 +711,23 @@ export default function App() {
     },
   ]
 
+  // Auth gate: kalau login wall dinyalakan (AUTH_REQUIRED) DAN Supabase
+  // dikonfigurasi TAPI belum ada session, tampilkan HANYA halaman Login
+  // (bukan seluruh app). Loading singkat saat getSession() masih berjalan
+  // supaya tidak "flash" ke LoginPage lalu langsung ke app. Dengan
+  // AUTH_REQUIRED false (default submission) ATAU mode demo (!isConfigured),
+  // kedua cabang di bawah dilewati sepenuhnya → app langsung render.
+  if (AUTH_REQUIRED && isConfigured && authLoading) {
+    return (
+      <div className="h-screen w-screen flex items-center justify-center bg-slate-50 text-sm text-slate-400">
+        Memuat sesi…
+      </div>
+    )
+  }
+  if (AUTH_REQUIRED && isConfigured && !session) {
+    return <LoginPage />
+  }
+
   return (
     <div className="h-screen w-screen flex flex-col bg-slate-50">
       {/* Header */}
@@ -678,6 +743,21 @@ export default function App() {
           <span className="ml-auto text-xs bg-amber-400/20 text-amber-100 border border-amber-300/40 rounded-full px-3 py-1">
             Mode demo — Supabase belum tersambung
           </span>
+        )}
+        {isConfigured && session && (
+          <div className="ml-auto flex items-center gap-2">
+            <span className="text-xs text-white/70 truncate max-w-[160px]" title={session.user?.email}>
+              {session.user?.email}
+            </span>
+            <button
+              onClick={() => supabase.auth.signOut()}
+              title="Logout"
+              className="flex items-center gap-1 text-xs bg-white/10 hover:bg-white/20 border border-white/20 rounded-full px-3 py-1 transition"
+            >
+              <LogOut size={12} />
+              Logout
+            </button>
+          </div>
         )}
       </header>
 
@@ -753,12 +833,7 @@ export default function App() {
             {activeTab === 'rekomendasi' && <EquityIndexView />}
             {activeTab === 'data-laporan' && <DataLaporan />}
             {activeTab === 'pengaturan' && (
-              <ComingSoon
-                icon={Settings}
-                title="Pengaturan"
-                description="Preferensi tampilan & konfigurasi akun — belum masuk jalur kritis submission."
-                plannedPhase="Belum dijadwalkan"
-              />
+              <Pengaturan session={session} onLoggedOut={() => setActiveTab('peta')} />
             )}
           </aside>
         )}
