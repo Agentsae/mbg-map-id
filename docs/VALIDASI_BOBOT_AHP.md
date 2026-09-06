@@ -1,6 +1,19 @@
 # Validasi Bobot Index — CAI, TDI, Transit Equity Index
 
-> **Status terkini (2026-09-03):** bobot ketiga index (CAI, TDI_MOBILITAS,
+> **Update 2026-09-06 (TDI_MOBILITAS — komponen ketiga diganti):** komponen
+> `tanpa_kendaraan` (rasio RT tanpa kendaraan pribadi) pada Indeks Kebutuhan
+> Mobilitas **diganti** menjadi `usia_sekolah` (proporsi penduduk umur 5–19).
+> Bobot 0,4000 dan CR 0,0000 **tidak berubah** — hanya komponennya. Matriks
+> pairwise 3×3 baru diarsipkan di **Bagian 0A** di bawah; versi
+> `tanpa_kendaraan` (Bagian 0.2 / 2.2) berstatus **digantikan**. Alasan
+> singkat: rasio tanpa-kendaraan tidak tersedia pada resolusi spasial
+> (Susenas Kota Bekasi 2025 hanya angka kota: 93,05% RT punya aset
+> transportasi) sehingga `compute_tdi_full.py` selama ini fallback ke nilai
+> netral 0,5 seragam di semua grid → bobot 0,40 tanpa daya pisah. Anak usia
+> sekolah = populasi di bawah usia mengemudi, transit-dependent (Jiao &
+> Dillivan 2013; Currie 2010). Migration `026_tdi_mobilitas_usia_sekolah.sql`.
+>
+> **Status (2026-09-03):** bobot ketiga index (CAI, TDI_MOBILITAS,
 > EQUITY) sudah **diturunkan ulang lewat sesi AHP pairwise-comparison Saaty
 > formal pada 2026-09-03**, menggantikan worksheet yang sebelumnya hanya
 > direview informal oleh mentor (27 Agustus 2026). Consistency ratio ketiga
@@ -40,18 +53,24 @@ di-set oleh migration `018_konfigurasi_bobot_ahp_final.sql`):
 jarak_inv naik jadi setara di puncak, volume & survei turun.
 
 ### 0.2 Indeks Kebutuhan Mobilitas — `nama_index='TDI_MOBILITAS'` — CR = **0,0000**
+
+> **DIGANTIKAN sebagian oleh Bagian 0A (2026-09-06):** komponen ketiga
+> `tanpa_kendaraan` → `usia_sekolah`. Bobot & CR tetap. Tabel di bawah adalah
+> versi 2026-09-03.
+
 | `nama_kriteria` | Bobot |
 |---|---|
 | `usia_rentan` | **0,2000** |
 | `poi_harian` | **0,4000** |
-| `tanpa_kendaraan` | **0,4000** |
+| ~~`tanpa_kendaraan`~~ → `usia_sekolah` (0A) | **0,4000** |
 
 Σ = 1,0000. CR = 0 karena matriks pairwise 3×3-nya transitif penuh (konsisten
-sempurna). Perubahan vs draft lama (0,40 / 0,35 / 0,25): `poi_harian` &
-`tanpa_kendaraan` naik jadi dominan, `usia_rentan` turun.
-**Catatan data:** `tanpa_kendaraan` masih memakai fallback netral 0,5 di semua
-grid (data BPS/Susenas belum ada) — bobot 0,40 belum benar-benar diskriminatif
-sampai datanya masuk.
+sempurna). Perubahan vs draft lama (0,40 / 0,35 / 0,25): komponen `poi_harian` &
+komponen ketiga naik jadi dominan, `usia_rentan` turun.
+**Catatan data (versi 2026-09-03, kini usang):** `tanpa_kendaraan` memakai
+fallback netral 0,5 di semua grid (data per-kelurahan tidak ada) sehingga bobot
+0,40 tidak diskriminatif — inilah alasan penggantian ke `usia_sekolah` yang
+punya data spasial riil (Bagian 0A).
 
 ### 0.3 Transit Equity Index — `nama_index='EQUITY'` — CR = **0,0457**
 | `nama_kriteria` | Bobot |
@@ -84,6 +103,52 @@ lama vs baru = 0,98, ranking 1 tetap Arenjaya, ranking 56 tetap Margamulya.
 > (b) vektor bobot hasil eigenvector, (c) λ_max, CI, RI, dan CR terhitung —
 > supaya juri/mentor bisa menelusuri CR 0,0226 / 0,0000 / 0,0457 dari angka
 > mentah, bukan menerimanya sebagai klaim.
+
+---
+
+## 0A. TDI_MOBILITAS — matriks pairwise komponen ketiga = `usia_sekolah` (2026-09-06)
+
+**Konteks:** menggantikan baris `tanpa_kendaraan` dari sesi 2026-09-03 (Bagian
+0.2). Struktur matriks pairwise 3×3 dipertahankan identik dengan versi lama —
+hanya kriteria C yang diganti (`tanpa_kendaraan` → `usia_sekolah`), sehingga
+eigenvector & CR tidak berubah.
+
+**Matriks pairwise Saaty (skala 1–9), i baris dibanding j kolom:**
+
+| | A `usia_rentan` | B `poi_harian` | C `usia_sekolah` |
+|---|---|---|---|
+| **A `usia_rentan`** | 1 | 1/2 | 1/2 |
+| **B `poi_harian`** | 2 | 1 | 1 |
+| **C `usia_sekolah`** | 2 | 1 | 1 |
+
+Pertimbangan: `poi_harian` dan `usia_sekolah` sama pentingnya (rasio 1) sebagai
+penggerak mobilitas non-diskresioner harian; keduanya moderat lebih penting
+(rasio 2) dari `usia_rentan` yang porsi populasinya lebih kecil.
+
+**Eigenvector (bobot), row-geometric-mean lalu normalisasi Σ = 1:**
+- A: (1 · 0,5 · 0,5)^(1/3) = 0,63 → **0,2000**
+- B: (2 · 1 · 1)^(1/3) = 1,26 → **0,4000**
+- C: (2 · 1 · 1)^(1/3) = 1,26 → **0,4000**
+
+**Konsistensi:** matriks transitif penuh (2·1 = 2 di semua jalur) → λ_max = 3,
+CI = (λ_max − n)/(n − 1) = 0, RI(n=3) = 0,58 → **CR = 0,0000** (< 0,1).
+
+**Definisi data `usia_sekolah`:** proporsi penduduk umur 5–19 per kelurahan =
+(pita `05-09` + `10-14` + `15-19` dari sheet `JUMDUK_KELUMUR`) ÷
+`jumlah_penduduk`. Sumber: DKB Semester I 2026 — Ditjen Dukcapil Kemendagri
+(file sama yang dipakai `etl/load_penduduk.py`). Tidak overlap dengan
+`usia_rentan` (= lansia 65+ + balita 0–4). Kolom
+`penduduk.proporsi_usia_sekolah` (migration 026); dinormalisasi min-max lintas
+grid di `compute_indeks_kebutuhan_mobilitas()` supaya rentang sempitnya
+(riil Kota Bekasi ≈ 0,222–0,289, median 0,247) tetap punya daya pisah — beda
+dari `usia_rentan` yang dipakai mentah.
+
+**Dampak ke skor turunan (simulasi offline 2.607 grid, sebelum push):**
+median `skor_tdi` 0,688 → 0,666 · mean 0,507 → 0,497 · jumlah "transit desert"
+(`skor_tdi` > 0,6) 1.540 → 1.503 · Spearman rank corr lama-vs-baru **0,978**
+(75 grid bergeser > 0,10). Yang paling berubah: rentang Indeks Kebutuhan
+Mobilitas melebar dari 0,219–0,624 (komponen ke-3 mati di 0,5) jadi
+0,028–0,594 (komponen ke-3 hidup, min-max 0–0,4).
 
 ---
 
@@ -126,7 +191,7 @@ Per cell grid 300 m. Migration `009_...sql`. Σ = 1,00.
 |---|---|---|
 | `usia_rentan` | **0,40** | Lansia + balita paling bergantung transit & paling terdampak bila akses buruk; proksi paling langsung untuk "kebutuhan mobilitas non-diskresioner". |
 | `poi_harian` | **0,35** | Banyak tujuan harian dalam radius = mobilitas rutin tinggi = kebutuhan layanan feeder tinggi. |
-| `tanpa_kendaraan` | **0,25** | Rumah tangga tanpa kendaraan pribadi = *transit-dependent* klasik. **Data belum ada → fallback 0,5 seragam** (bobotnya tidak hilang tapi tidak diskriminatif untuk saat ini). |
+| `tanpa_kendaraan` | **0,25** | Rumah tangga tanpa kendaraan pribadi = *transit-dependent* klasik. **Data belum ada → fallback 0,5 seragam.** _Digantikan `usia_sekolah` pada 2026-09-06 (Bagian 0A) justru karena masalah ini._ |
 
 ### 2.3 Transit Equity Index (`nama_index='EQUITY'`)
 Per kelurahan. Migration `009_...sql`. Σ = 1,00.
@@ -264,8 +329,11 @@ sekadar review informal:
   empiris; matriks pairwise mentahnya belum dilampirkan ke repo (Bagian 0.5).
   Subjektivitas residual dimitigasi lewat sensitivity analysis, bukan
   dihilangkan.
-- `rasio_tanpa_kendaraan` (bobot AHP 0,40 di Indeks Kebutuhan Mobilitas) memakai
-  nilai netral 0,5 di semua grid — komponen ini belum benar-benar aktif.
+- ~~`rasio_tanpa_kendaraan` (bobot AHP 0,40 di Indeks Kebutuhan Mobilitas) memakai
+  nilai netral 0,5 di semua grid~~ — **diperbaiki 2026-09-06:** komponen ketiga
+  diganti ke `usia_sekolah` (proporsi penduduk umur 5–19), yang punya data
+  per-kelurahan riil (DKB Semester I 2026) dan dinormalisasi min-max lintas grid
+  sehingga bobot 0,40 kini benar-benar diskriminatif (Bagian 0A).
 - `n_volume` CAI untuk 8 titik real berbasis **estimasi observasi lapangan
   singkat**, bukan traffic counting kontinu 2 jam (lihat `DATA_CHECKLIST.md`
   28 Agu) — presisi lebih rendah dari desain instrumen awal.

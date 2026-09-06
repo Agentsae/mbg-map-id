@@ -7,6 +7,16 @@ master Excel DKB (Data Konsolidasi Bersih) Semester I 2026, gabungkan
 dengan tabel batas_administrasi (kelurahan_id) yang sudah ter-upload dari
 RBI BIG, lalu upload ke tabel `penduduk` di Supabase.
 
+Struktur usia yang diturunkan dari sheet JUMDUK_KELUMUR:
+  - proporsi_balita        pita 00-04
+  - proporsi_lansia        pita 65-69 + 70-74 + >75 (lansia BPS: 65+)
+  - proporsi_usia_sekolah  pita 05-09 + 10-14 + 15-19 (umur 5–19, proksi
+                           jenjang SD–SMA / populasi di bawah usia mengemudi
+                           yang transit-dependent) — komponen ketiga Indeks
+                           Kebutuhan Mobilitas TDI, kolom baru dari migration
+                           026_tdi_mobilitas_usia_sekolah.sql (keputusan tim
+                           2026-09-06, menggantikan 'tanpa_kendaraan').
+
 Sumber: DAK_SEMESTER_1_TAHUN_2026_REV01.xlsx — DKB (Data Konsolidasi
 Bersih) Semester I 2026, terbitan Ditjen Dukcapil Kemendagri (instansi
 pusat; PRD final Bab 1.1). File di-retrieve lewat portal
@@ -36,6 +46,9 @@ Setup:
 Cara pakai:
     python load_penduduk.py --excel data/demografi/DAK_SEMESTER_1_TAHUN_2026_REV01.xlsx --dry-run
     python load_penduduk.py --excel data/demografi/DAK_SEMESTER_1_TAHUN_2026_REV01.xlsx
+    # setelah migration 026 (kolom proporsi_usia_sekolah sudah ada, 56 baris
+    # penduduk sudah terisi) — isi kolom baru tanpa insert dobel:
+    python load_penduduk.py --excel data/demografi/DAK_SEMESTER_1_TAHUN_2026_REV01.xlsx --update-existing
 """
 
 import argparse
@@ -51,6 +64,17 @@ from upload_to_supabase import get_client
 # 65-69 + 70-74 + >75 (definisi lansia BPS: 65 tahun ke atas).
 BALITA_BAND = "00-04"
 LANSIA_BANDS = ["65-69", "70-74", ">75"]
+
+# Definisi "usia sekolah" (keputusan tim 2026-09-06, Opsi 2): proporsi
+# penduduk umur 5–19 = gabungan pita 05-09 + 10-14 + 15-19 dari sheet
+# JUMDUK_KELUMUR. Proksi populasi jenjang SD–SMA yang berada DI BAWAH usia
+# mengemudi dan transit-dependent (trip harian rutin ke sekolah) —
+# komponen ketiga Indeks Kebutuhan Mobilitas (TDI), menggantikan
+# 'tanpa_kendaraan' yang tidak tersedia pada resolusi spasial. TIDAK
+# overlap dengan "usia rentan" (lansia 65+ + balita 0–4). Sumber sama:
+# DKB Semester I 2026 — Ditjen Dukcapil Kemendagri. Lihat migration
+# 026_tdi_mobilitas_usia_sekolah.sql + docs/VALIDASI_BOBOT_AHP.md.
+USIA_SEKOLAH_BANDS = ["05-09", "10-14", "15-19"]
 
 # Nilai kolom `sumber` yang ditulis ke tabel penduduk untuk baris hasil
 # script ini — dipakai juga sebagai kunci idempotency guard di upload().
@@ -122,8 +146,10 @@ def read_produktif_non(wb) -> dict:
 
 
 def read_kelompok_umur(wb) -> dict:
-    """Return {kode_10digit: {balita, lansia}} dari sheet JUMDUK_KELUMUR,
-    sesuai definisi BALITA_BAND/LANSIA_BANDS di atas."""
+    """Return {kode_10digit: {balita, lansia, usia_sekolah}} dari sheet
+    JUMDUK_KELUMUR, sesuai definisi BALITA_BAND / LANSIA_BANDS /
+    USIA_SEKOLAH_BANDS di atas. usia_sekolah = None kalau salah satu pita
+    5–19 tidak ada di header (guard, konsisten dengan pola proporsi_lansia)."""
     ws = wb["JUMDUK_KELUMUR"]
 
     # Baris 6 (index sesuai contoh di atas) = header pita usia per grup 3 kolom (L, P, JUMLAH)
@@ -152,7 +178,11 @@ def read_kelompok_umur(wb) -> dict:
 
         balita = band_jumlah(BALITA_BAND)
         lansia = sum(band_jumlah(b) for b in LANSIA_BANDS)
-        out[kode] = {"balita": balita, "lansia": lansia}
+        try:
+            usia_sekolah = sum(band_jumlah(b) for b in USIA_SEKOLAH_BANDS)
+        except KeyError:
+            usia_sekolah = None  # pita 5–19 tidak lengkap di header sheet
+        out[kode] = {"balita": balita, "lansia": lansia, "usia_sekolah": usia_sekolah}
     return out
 
 
@@ -177,6 +207,8 @@ def build_dataset(excel_path: str):
             warnings.append(f"{kode} ({nama_kel}): nama kecamatan tidak ditemukan")
         if um is None:
             warnings.append(f"{kode} ({nama_kel}): data kelompok umur tidak ditemukan")
+        elif um.get("usia_sekolah") is None:
+            warnings.append(f"{kode} ({nama_kel}): pita usia sekolah 5–19 tidak lengkap di JUMDUK_KELUMUR")
         if pr and pr["usia_produktif"] + pr["usia_muda"] + pr["usia_tua"] != jumlah:
             warnings.append(
                 f"{kode} ({nama_kel}): jumlah PRODUKTIF_NON "
@@ -185,6 +217,13 @@ def build_dataset(excel_path: str):
 
         proporsi_balita = round(um["balita"] / jumlah, 4) if um and jumlah else None
         proporsi_lansia = round(um["lansia"] / jumlah, 4) if um and jumlah else None
+        # Proporsi usia sekolah (5–19) — guard jumlah==0 / pita hilang -> None,
+        # pola identik proporsi_lansia (lihat migration 026).
+        proporsi_usia_sekolah = (
+            round(um["usia_sekolah"] / jumlah, 4)
+            if um and jumlah and um.get("usia_sekolah") is not None
+            else None
+        )
 
         rows.append({
             "kode": kode,
@@ -193,6 +232,7 @@ def build_dataset(excel_path: str):
             "jumlah_penduduk": jumlah,
             "proporsi_balita": proporsi_balita,
             "proporsi_lansia": proporsi_lansia,
+            "proporsi_usia_sekolah": proporsi_usia_sekolah,
         })
 
     return rows, warnings
@@ -231,6 +271,7 @@ def match_rows(rows: list, id_map: dict):
             "jumlah_penduduk": r["jumlah_penduduk"],
             "proporsi_lansia": r["proporsi_lansia"],
             "proporsi_balita": r["proporsi_balita"],
+            "proporsi_usia_sekolah": r["proporsi_usia_sekolah"],
             "sumber": SUMBER_LABEL,
         })
     return records, unmatched
@@ -263,10 +304,50 @@ def upload(client, records: list):
     return result
 
 
+def update_existing(client, records: list):
+    """
+    Mode --update-existing: baris `penduduk` (56 kelurahan REAL) SUDAH ada di
+    DB, jadi insert dobel dilarang oleh guard di upload(). Fungsi ini hanya
+    men-UPDATE kolom `proporsi_usia_sekolah` (kolom baru dari migration 026)
+    pada baris yang sudah ada, di-match lewat (kelurahan_id, sumber=SUMBER_LABEL).
+    Kolom lain (jumlah_penduduk, proporsi_lansia, proporsi_balita) TIDAK
+    disentuh — angkanya tidak berubah, dan membiarkannya utuh membuat diff
+    ke DB minimal & mudah diaudit qa-tester. Idempotent: rerun menulis nilai
+    yang sama.
+    """
+    updated, tidak_ditemukan = 0, []
+    for r in records:
+        res = (
+            client.table("penduduk")
+            .update({"proporsi_usia_sekolah": r["proporsi_usia_sekolah"]})
+            .eq("kelurahan_id", r["kelurahan_id"])
+            .eq("sumber", SUMBER_LABEL)
+            .execute()
+        )
+        if res.data:
+            updated += len(res.data)
+        else:
+            tidak_ditemukan.append(r["kelurahan_id"])
+
+    if tidak_ditemukan:
+        print(
+            f"[PERINGATAN] {len(tidak_ditemukan)} kelurahan_id tidak punya baris penduduk "
+            f"berlabel '{SUMBER_LABEL}' untuk di-UPDATE: {tidak_ditemukan}"
+        )
+    print(f"Berhasil UPDATE proporsi_usia_sekolah pada {updated} dari {len(records)} baris penduduk.")
+    return updated
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--excel", required=True)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--update-existing",
+        action="store_true",
+        help="UPDATE kolom proporsi_usia_sekolah pada 56 baris penduduk yang sudah ada "
+             "(dipakai setelah migration 026 menambah kolomnya), bukan insert baru.",
+    )
     args = parser.parse_args()
 
     rows, warnings = build_dataset(args.excel)
@@ -285,8 +366,18 @@ def main():
 
     print("Contoh 5 baris pertama:")
     for r in rows[:5]:
+        us = r["proporsi_usia_sekolah"]
+        us_str = f"{us:.2%}" if us is not None else "  n/a"
         print(f"   {r['nama_kecamatan']:20s} {r['nama_kelurahan']:20s} "
-              f"jml={r['jumlah_penduduk']:>7,} balita={r['proporsi_balita']:.2%} lansia={r['proporsi_lansia']:.2%}")
+              f"jml={r['jumlah_penduduk']:>7,} balita={r['proporsi_balita']:.2%} "
+              f"lansia={r['proporsi_lansia']:.2%} usia_sekolah(5-19)={us_str}")
+
+    us_vals = sorted(r["proporsi_usia_sekolah"] for r in rows if r["proporsi_usia_sekolah"] is not None)
+    n_null_us = sum(1 for r in rows if r["proporsi_usia_sekolah"] is None)
+    if us_vals:
+        med = us_vals[len(us_vals) // 2]
+        print(f"\nproporsi_usia_sekolah: {len(us_vals)}/{len(rows)} terisi "
+              f"(min={us_vals[0]:.4f} median={med:.4f} max={us_vals[-1]:.4f}), {n_null_us} NULL")
 
     # Matching ke batas_administrasi dijalankan WALAUPUN --dry-run (butuh
     # koneksi Supabase read-only) supaya unmatched name bisa diinvestigasi
@@ -307,7 +398,10 @@ def main():
         print("\n--dry-run aktif, tidak upload ke Supabase.")
         return
 
-    upload(client, records)
+    if args.update_existing:
+        update_existing(client, records)
+    else:
+        upload(client, records)
 
 
 if __name__ == "__main__":

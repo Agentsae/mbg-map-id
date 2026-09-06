@@ -25,7 +25,7 @@ import { extractLatLon } from '../../lib/geo'
 const TRANSIT_DESERT_THRESHOLD = 0.6
 
 const DEMO_MODEL = {
-  transitDesertCount: 1517,
+  transitDesertCount: 1503,
   transitDesertDemo: true,
   cityCoverage800m: 0.071,
   coverageDemo: true,

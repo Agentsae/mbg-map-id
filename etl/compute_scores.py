@@ -23,7 +23,8 @@ TODO integrasi selanjutnya (belum dikerjakan di sini, butuh data asli):
       * n_volume      <- jumlah penumpang KRL/BRT dalam radius tertentu
       * n_survei      <- skor_survei_gabungan dari tabel halte_eksisting
       * skor_aksesibilitas_transit <- coverage isochrone 400m/800m per grid
-      * kepadatan_poi_harian, rasio_tanpa_kendaraan <- overlay poi + data BPS/Dukcapil
+      * kepadatan_poi_harian <- overlay poi; proporsi_usia_sekolah <- spatial join
+        centroid grid -> kelurahan, ambil penduduk.proporsi_usia_sekolah (migration 026)
       * skor_cai_rata2, jarak_rata2_* per kelurahan <- agregasi skor_cai per grid/titik
         yang jatuh di dalam tiap kelurahan (spatial join ke batas_administrasi)
   - Bobot dibaca dari tabel konfigurasi_bobot (hasil AHP pairwise Saaty
@@ -54,14 +55,20 @@ DEFAULT_WEIGHTS = {
 }
 
 # Bobot untuk Indeks Kebutuhan Mobilitas (komponen TDI) — proksi kerentanan
-# mobilitas sesuai Bab 7 PRD: "proporsi lansia/difabel, kepadatan POI
-# kebutuhan harian, rasio rumah tangga tanpa kendaraan pribadi (jika data
-# tersedia)". Nilai = hasil AHP 2026-09-03 (konfigurasi_bobot
-# nama_index='TDI_MOBILITAS'). CR = 0 (matriks 3x3 konsisten sempurna).
+# mobilitas. PRD Bab 7 menyebut proksi "proporsi lansia/difabel, kepadatan
+# POI kebutuhan harian, rasio RT tanpa kendaraan". Komponen ketiga DIGANTI
+# (keputusan tim 2026-09-06, migration 026) dari 'tanpa_kendaraan' ->
+# 'usia_sekolah' = proporsi penduduk umur 5–19 (jenjang SD–SMA / di bawah
+# usia mengemudi, transit-dependent). Alasan: rasio tanpa-kendaraan tidak
+# tersedia pada resolusi spasial (Susenas hanya angka kota 93,05% RT punya
+# aset transportasi) -> selama ini fallback netral 0,5 di semua grid (nol
+# daya pisah). Nilai bobot = hasil AHP (konfigurasi_bobot
+# nama_index='TDI_MOBILITAS'); 'usia_sekolah' mengambil alih slot 0,4000
+# apa adanya, matriks pairwise Saaty 3x3 tetap CR = 0,0000.
 DEFAULT_MOBILITY_WEIGHTS = {
     "usia_rentan": 0.2000,
     "poi_harian": 0.4000,
-    "tanpa_kendaraan": 0.4000,
+    "usia_sekolah": 0.4000,
 }
 
 # Bobot untuk Transit Equity Index — menggabungkan composite accessibility
@@ -269,39 +276,37 @@ def sensitivity_check_equity(df: pd.DataFrame, base_weights: dict = None, delta:
 
 def compute_indeks_kebutuhan_mobilitas(df: pd.DataFrame, weights: dict = None) -> pd.Series:
     """
-    Hitung Indeks Kebutuhan Mobilitas (0-1) — komponen TDI, sesuai proksi
-    Bab 7 PRD: proporsi lansia/difabel, kepadatan POI kebutuhan harian,
-    rasio rumah tangga tanpa kendaraan pribadi.
+    Hitung Indeks Kebutuhan Mobilitas (0-1) — komponen TDI. Proksi kerentanan
+    mobilitas (PRD Bab 7), dengan komponen ketiga diganti ke usia sekolah
+    (keputusan tim 2026-09-06, migration 026 — lihat DEFAULT_MOBILITY_WEIGHTS):
 
-    df wajib punya kolom mentah:
-      - proporsi_usia_rentan   (0-1, gabungan proporsi lansia + difabel/balita,
-                                 sudah rasio jadi tidak dinormalisasi ulang)
-      - kepadatan_poi_harian   (jumlah POI kebutuhan harian per grid/radius)
-      - rasio_tanpa_kendaraan  (0-1, OPSIONAL — PRD: "jika data tersedia")
+      - proporsi_usia_rentan    (0-1, gabungan proporsi lansia + balita; sudah
+                                  rasio -> dipakai APA ADANYA, tidak dinormalisasi)
+      - kepadatan_poi_harian    (jumlah POI kebutuhan harian per grid/radius;
+                                  dinormalisasi min-max lintas grid)
+      - proporsi_usia_sekolah   (0-1, proporsi penduduk umur 5–19 per kelurahan =
+                                  pita 05-09 + 10-14 + 15-19 / jumlah_penduduk;
+                                  proksi populasi di bawah usia mengemudi yang
+                                  transit-dependent. Dinormalisasi min-max lintas
+                                  grid supaya rentang sempitnya (~0,22–0,29 di
+                                  Kota Bekasi) tetap punya daya pisah — beda dari
+                                  usia_rentan yang dipakai mentah.)
 
-    Kalau rasio_tanpa_kendaraan belum tersedia (data BPS/susenas belum masuk),
-    kriteria itu diberi nilai netral 0.5 supaya bobotnya tidak hilang begitu
-    saja, tapi juga tidak memihak — ganti begitu datanya ada.
+    Semua kolom di atas WAJIB ada. Tidak ada lagi jalur fallback netral 0,5
+    (dulu dipakai untuk 'rasio_tanpa_kendaraan' yang tak tersedia per-grid —
+    dihapus di migration 026).
     """
     weights = weights or DEFAULT_MOBILITY_WEIGHTS
     assert abs(sum(weights.values()) - 1.0) < 1e-6, "Bobot mobilitas harus berjumlah 1.0"
 
     n_usia_rentan = df["proporsi_usia_rentan"]
     n_poi_harian = normalize_min_max(df["kepadatan_poi_harian"])
-
-    if "rasio_tanpa_kendaraan" in df.columns:
-        n_tanpa_kendaraan = df["rasio_tanpa_kendaraan"]
-    else:
-        print(
-            "[PERINGATAN] Kolom 'rasio_tanpa_kendaraan' belum ada — pakai nilai netral 0.5 "
-            "untuk kriteria ini sampai data BPS/susenas tersedia."
-        )
-        n_tanpa_kendaraan = pd.Series(0.5, index=df.index)
+    n_usia_sekolah = normalize_min_max(df["proporsi_usia_sekolah"])
 
     return (
         weights["usia_rentan"] * n_usia_rentan
         + weights["poi_harian"] * n_poi_harian
-        + weights["tanpa_kendaraan"] * n_tanpa_kendaraan
+        + weights["usia_sekolah"] * n_usia_sekolah
     )
 
 
@@ -315,7 +320,7 @@ def compute_tdi(df: pd.DataFrame, mobility_weights: dict = None) -> pd.DataFrame
       - kepadatan_penduduk           (jiwa/km2 per grid)
       - skor_aksesibilitas_transit   (0-1, dari coverage isochrone 400m/800m —
                                        makin tinggi makin terlayani)
-      - proporsi_usia_rentan, kepadatan_poi_harian, (opsional) rasio_tanpa_kendaraan
+      - proporsi_usia_rentan, kepadatan_poi_harian, proporsi_usia_sekolah
         -> lihat compute_indeks_kebutuhan_mobilitas()
 
     Return: df + kolom indeks_kebutuhan_mobilitas, tdi_raw (rasio mentah,
@@ -447,9 +452,10 @@ def load_demo_grid_data() -> pd.DataFrame:
         "skor_aksesibilitas_transit": [0.10, 0.85, 0.15, 0.20],
         "proporsi_usia_rentan": [0.22, 0.15, 0.25, 0.19],
         "kepadatan_poi_harian": [12, 30, 9, 14],
-        # rasio_tanpa_kendaraan sengaja tidak disertakan di demo ini supaya
-        # jalur fallback netral 0.5 di compute_indeks_kebutuhan_mobilitas()
-        # ikut teruji — isi kolom ini begitu data BPS/susenas tersedia.
+        # proporsi_usia_sekolah (umur 5–19) — komponen ketiga Indeks Kebutuhan
+        # Mobilitas sejak migration 026 (menggantikan rasio_tanpa_kendaraan).
+        # Angka contoh dalam rentang riil Kota Bekasi (~0,22–0,29).
+        "proporsi_usia_sekolah": [0.27, 0.23, 0.28, 0.25],
     })
 
 

@@ -254,10 +254,10 @@ export default function Dashboard() {
     // yang dihitung ulang di sini.
     //
     // fetchAllRows (bukan `.select(...).then(...)` polos) — dengan ambang
-    // 0.6, 1.517 dari 2.607 grid cocok filter ini (diverifikasi langsung ke
-    // API), jauh di atas cap 1000 baris/request PostgREST. Tanpa paginasi,
-    // transitDesertCount akan diam-diam undercount (hanya menghitung 1000
-    // dari 1517 grid) — lihat lib/fetchAllRows.js.
+    // 0.6, ~1.503 dari 2.607 grid cocok filter ini (diverifikasi langsung ke
+    // API pasca-recompute TDI usia_sekolah 2026-09-06), jauh di atas cap 1000
+    // baris/request PostgREST. Tanpa paginasi, transitDesertCount akan diam-
+    // diam undercount (hanya menghitung 1000 grid) — lihat lib/fetchAllRows.js.
     fetchAllRows(() =>
       supabase
         .from('grid_analisis')

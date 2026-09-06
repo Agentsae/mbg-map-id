@@ -109,7 +109,7 @@ const DEMO_TDI_BREAKDOWN = {
       kunci: 'indeks_kebutuhan_mobilitas',
       label: 'Indeks Kebutuhan Mobilitas',
       nilai: 0.612,
-      satuan: 'indeks 0-1 (proksi: proporsi usia rentan, kepadatan POI harian, rasio tanpa kendaraan)',
+      satuan: 'indeks 0-1 (proksi: proporsi usia rentan, kepadatan POI harian, proporsi usia sekolah 5-19)',
       peran: 'pembilang',
       arah: 'Makin tinggi -> TDI makin tinggi',
     },

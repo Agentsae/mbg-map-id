@@ -19,7 +19,7 @@ Sumber tiap kolom mentah:
                                  — Ditjen Dukcapil Kemendagri) / luas kelurahan
                                  (geom RBI, dihitung di EPSG:32748 UTM 48S, jiwa/km2)
   - proporsi_usia_rentan      <- penduduk.proporsi_lansia + proporsi_balita
-                                 (sama seperti load_kelurahan_usia_rentan() di
+                                 (sama seperti load_kelurahan_mobilitas() di
                                  compute_tdi_full.py — proksi PRD Bab 7d,
                                  data difabel belum tersedia)
   - jarak_rata2_{pendidikan,kesehatan,kerja}_m <- RATA-RATA jarak sjoin_nearest

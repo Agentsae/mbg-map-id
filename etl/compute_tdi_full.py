@@ -20,6 +20,12 @@ ada scriptnya (dicatat sebagai TODO di compute_scores.py & DATA_CHECKLIST.md):
     (DKB Semester I 2026 — Ditjen Dukcapil Kemendagri). Definisi "usia rentan" di sini
     HANYA lansia+balita (proksi PRD Bab 7d) — data difabel belum tersedia,
     dicatat sebagai keterbatasan, bukan disembunyikan.
+  - proporsi_usia_sekolah       <- spatial join yang SAMA (centroid grid ->
+    kelurahan RBI), ambil penduduk.proporsi_usia_sekolah (proporsi penduduk
+    umur 5–19 = pita 05-09 + 10-14 + 15-19, jenjang SD–SMA / populasi di
+    bawah usia mengemudi yang transit-dependent). Komponen ketiga Indeks
+    Kebutuhan Mobilitas sejak keputusan tim 2026-09-06 (migration 026),
+    MENGGANTIKAN 'tanpa_kendaraan' yang tidak tersedia pada resolusi spasial.
   - kepadatan_poi_harian        <- jumlah POI real (sumber='OpenStreetMap',
     jenis sekolah/faskes/kerja) dalam radius RADIUS_POI_M dari centroid grid.
 
@@ -27,9 +33,11 @@ kepadatan_penduduk grid TIDAK dihitung ulang di sini — dipakai apa adanya
 dari grid_analisis (hasil rerun_dasymetric_grid.py, building footprint OSM
 asli, assert konservasi populasi sudah lolos).
 
-rasio_tanpa_kendaraan TETAP tidak tersedia (data BPS/Susenas belum ada) —
-compute_indeks_kebutuhan_mobilitas() otomatis fallback ke nilai netral 0.5
-untuk kriteria ini di semua grid, dicetak sebagai peringatan eksplisit.
+CATATAN 2026-09-06: komponen ketiga Indeks Kebutuhan Mobilitas diganti dari
+'tanpa_kendaraan' (fallback netral 0,5 seragam -> nol daya pisah) ke
+'usia_sekolah' (proporsi penduduk umur 5–19 per kelurahan, real dari
+penduduk.proporsi_usia_sekolah). Jalur fallback 0,5 di
+compute_indeks_kebutuhan_mobilitas() sudah dihapus (migration 026).
 
 Cara pakai:
     python compute_tdi_full.py              # hitung + print ringkasan, TIDAK upload
@@ -95,19 +103,34 @@ def load_grid(client) -> gpd.GeoDataFrame:
     return gdf
 
 
-def load_kelurahan_usia_rentan(client) -> gpd.GeoDataFrame:
+def load_kelurahan_mobilitas(client) -> gpd.GeoDataFrame:
+    """Kelurahan RBI asli (56) + dua proksi kebutuhan mobilitas per-kelurahan
+    dari tabel `penduduk`:
+      - proporsi_usia_rentan  = proporsi_lansia + proporsi_balita
+      - proporsi_usia_sekolah = penduduk.proporsi_usia_sekolah (umur 5–19,
+        kolom migration 026)
+    Kelurahan yang salah satu proksinya NULL dikecualikan (dicatat), lalu
+    ditangani lewat fallback rata-rata kota tertimbang populasi di
+    build_grid_features()."""
     admin_rows = fetch_all_paginated(
         client, "batas_administrasi", "id, nama_kelurahan, geom", filters={"sumber": SUMBER_BATAS_RESMI}
     )
     pend_rows = fetch_all_paginated(
-        client, "penduduk", "kelurahan_id, jumlah_penduduk, proporsi_lansia, proporsi_balita"
+        client,
+        "penduduk",
+        "kelurahan_id, jumlah_penduduk, proporsi_lansia, proporsi_balita, proporsi_usia_sekolah",
     )
     pend_by_kel = {r["kelurahan_id"]: r for r in pend_rows}
 
     records, missing = [], []
     for r in admin_rows:
         p = pend_by_kel.get(r["id"])
-        if p is None or p["proporsi_lansia"] is None or p["proporsi_balita"] is None:
+        if (
+            p is None
+            or p["proporsi_lansia"] is None
+            or p["proporsi_balita"] is None
+            or p.get("proporsi_usia_sekolah") is None
+        ):
             missing.append(r["nama_kelurahan"])
             continue
         records.append({
@@ -115,13 +138,20 @@ def load_kelurahan_usia_rentan(client) -> gpd.GeoDataFrame:
             "nama_kelurahan": r["nama_kelurahan"],
             "jumlah_penduduk": p["jumlah_penduduk"],
             "proporsi_usia_rentan": p["proporsi_lansia"] + p["proporsi_balita"],
+            "proporsi_usia_sekolah": float(p["proporsi_usia_sekolah"]),
             "geometry": wkb_hex_to_geom(r["geom"]),
         })
     if missing:
-        print(f"[PERINGATAN] {len(missing)} kelurahan RBI tanpa data penduduk lengkap, dikecualikan: {missing}")
+        print(
+            f"[PERINGATAN] {len(missing)} kelurahan RBI tanpa data penduduk lengkap "
+            f"(lansia/balita/usia_sekolah NULL), dikecualikan: {missing}"
+        )
 
     gdf = gpd.GeoDataFrame(records, crs=WGS84)
-    print(f"[INFO] Kelurahan RBI + proporsi_usia_rentan: {len(gdf)}/{len(admin_rows)} siap dipakai.")
+    print(
+        f"[INFO] Kelurahan RBI + proporsi_usia_rentan + proporsi_usia_sekolah: "
+        f"{len(gdf)}/{len(admin_rows)} siap dipakai."
+    )
     return gdf
 
 
@@ -148,7 +178,7 @@ def load_halte_real(client) -> gpd.GeoDataFrame:
 
 def build_grid_features(client) -> gpd.GeoDataFrame:
     grid = load_grid(client)
-    kelurahan = load_kelurahan_usia_rentan(client)
+    kelurahan = load_kelurahan_mobilitas(client)
     poi = load_poi_harian(client)
     halte = load_halte_real(client)
 
@@ -160,25 +190,31 @@ def build_grid_features(client) -> gpd.GeoDataFrame:
     centroids = grid_m.copy()
     centroids["geometry"] = centroids.geometry.centroid
 
-    # --- proporsi_usia_rentan: centroid grid -> kelurahan RBI (point-in-polygon) ---
-    joined = gpd.sjoin(centroids, kelurahan_m[["kelurahan_id", "proporsi_usia_rentan", "geometry"]],
-                        how="left", predicate="within")
+    # --- proporsi_usia_rentan + proporsi_usia_sekolah: centroid grid ->
+    #     kelurahan RBI (point-in-polygon), SATU spatial join untuk keduanya ---
+    joined = gpd.sjoin(
+        centroids,
+        kelurahan_m[["kelurahan_id", "proporsi_usia_rentan", "proporsi_usia_sekolah", "geometry"]],
+        how="left", predicate="within",
+    )
     joined = joined.loc[~joined.index.duplicated(keep="first")]  # jaga2 kalau centroid pas di garis batas 2 polygon
     grid_m["proporsi_usia_rentan"] = joined["proporsi_usia_rentan"].values
+    grid_m["proporsi_usia_sekolah"] = joined["proporsi_usia_sekolah"].values
 
-    n_unmatched = grid_m["proporsi_usia_rentan"].isna().sum()
-    if n_unmatched:
-        # Fallback: rata-rata kota (weighted by jumlah_penduduk) -- BUKAN 0 --
-        # supaya cell yang jatuh persis di celah antar-polygon (efek simplifikasi
-        # RBI 25K) tidak diam-diam mendapat skor kebutuhan mobilitas nihil.
-        total_pop = kelurahan["jumlah_penduduk"].sum()
-        rata2_kota = (kelurahan["proporsi_usia_rentan"] * kelurahan["jumlah_penduduk"]).sum() / total_pop
-        print(
-            f"[PERINGATAN] {n_unmatched}/{len(grid_m)} cell tidak match ke kelurahan RBI manapun "
-            f"(kemungkinan celah antar-polygon RBI 25K) -> pakai fallback rata-rata kota "
-            f"(weighted): {rata2_kota:.4f}"
-        )
-        grid_m["proporsi_usia_rentan"] = grid_m["proporsi_usia_rentan"].fillna(rata2_kota)
+    total_pop = kelurahan["jumlah_penduduk"].sum()
+    for kol in ("proporsi_usia_rentan", "proporsi_usia_sekolah"):
+        n_unmatched = grid_m[kol].isna().sum()
+        if n_unmatched:
+            # Fallback: rata-rata kota (weighted by jumlah_penduduk) -- BUKAN 0 --
+            # supaya cell yang jatuh persis di celah antar-polygon (efek simplifikasi
+            # RBI 25K) tidak diam-diam mendapat skor kebutuhan mobilitas nihil.
+            rata2_kota = (kelurahan[kol] * kelurahan["jumlah_penduduk"]).sum() / total_pop
+            print(
+                f"[PERINGATAN] {n_unmatched}/{len(grid_m)} cell tidak match ke kelurahan RBI manapun "
+                f"(kemungkinan celah antar-polygon RBI 25K) -> {kol} pakai fallback rata-rata kota "
+                f"(weighted): {rata2_kota:.4f}"
+            )
+            grid_m[kol] = grid_m[kol].fillna(rata2_kota)
 
     # --- kepadatan_poi_harian: jumlah POI real dalam radius RADIUS_POI_M dari centroid ---
     buffers = centroids.copy()
@@ -223,8 +259,24 @@ if __name__ == "__main__":
 
     print(f"\nTop 10 cell paling 'transit desert' (skor_tdi tertinggi):")
     print(scored[["grid_analisis_id", "kepadatan_penduduk", "proporsi_usia_rentan",
-                   "kepadatan_poi_harian", "jarak_halte_terdekat_m",
+                   "proporsi_usia_sekolah", "kepadatan_poi_harian", "jarak_halte_terdekat_m",
                    "skor_aksesibilitas_transit", "skor_tdi"]].head(10).round(4).to_string(index=False))
+
+    # --- Perbandingan skor_tdi LAMA (tersimpan di grid_analisis) vs BARU ---
+    print("\n--- skor_tdi LAMA (grid_analisis) vs BARU (usia_sekolah) ---")
+    lama_rows = fetch_all_paginated(client, "grid_analisis", "id, skor_tdi")
+    lama_map = {r["id"]: (float(r["skor_tdi"]) if r["skor_tdi"] is not None else None) for r in lama_rows}
+    cmp_df = scored[["grid_analisis_id", "skor_tdi"]].copy()
+    cmp_df["skor_tdi_lama"] = cmp_df["grid_analisis_id"].map(lama_map)
+    both = cmp_df.dropna(subset=["skor_tdi_lama"])
+    for label, s in [("LAMA", both["skor_tdi_lama"]), ("BARU", both["skor_tdi"])]:
+        print(f"  {label}: min={s.min():.4f} median={s.median():.4f} max={s.max():.4f} mean={s.mean():.4f}")
+    td_lama = int((both["skor_tdi_lama"] > 0.6).sum())
+    td_baru = int((both["skor_tdi"] > 0.6).sum())
+    delta = (both["skor_tdi"] - both["skor_tdi_lama"]).abs()
+    print(f"  Transit desert (skor_tdi > 0,6): LAMA {td_lama} -> BARU {td_baru} cell (dari {len(both)} cell dibandingkan)")
+    print(f"  |delta skor_tdi|: median={delta.median():.4f} max={delta.max():.4f} ; "
+          f"{int((delta > 0.05).sum())} cell berubah > 0,05 ; {int((delta > 0.10).sum())} cell berubah > 0,10")
 
     print("\n=== 4. Sensitivity analysis (geser bobot mobilitas ±10%) ===")
     sens = sensitivity_check_tdi(scored, weights)
