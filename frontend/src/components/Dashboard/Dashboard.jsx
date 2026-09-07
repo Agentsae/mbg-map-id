@@ -57,11 +57,17 @@ const DEMO_DATA = [
 ]
 const DEMO_CITY_COVERAGE_800M = 0.071 // ~7,1% penduduk kota dalam radius 800 m halte tersurvei
 
-// Kartu "Usulan Halte Prioritas" (mockup PRD Gambar 6 / Bab 10.2) — jumlah
-// titik kandidat halte baru tersurvei + ringkasan titik berskor CAI tertinggi.
+// Kartu "Usulan Halte Prioritas" (mockup PRD Gambar 6 / Bab 10.2).
+// SUMBER DIUBAH 2026-09-07: dulu menghitung baris `titik_kandidat` — itu
+// TITIK SURVEI LAPANGAN, bukan usulan; melabelinya "usulan halte" menyesatkan
+// (beberapa di antaranya justru simpul eksisting: Stasiun Bekasi, Terminal
+// Bekasi). Usulan yang sebenarnya = `usulan_halte_model` (migration 028),
+// diturunkan dari sel transit desert lalu diukur dampaknya lewat RPC
+// simulate_new_stop. Ringkasan "teratas" pakai proyeksi penduduk terlayani
+// 800 m — titik model sengaja TIDAK punya skor CAI (lihat CLAUDE.md).
 const DEMO_USULAN_HALTE = {
-  jumlah: 9,
-  teratas: { lokasi: 'Depan Summarecon Mall Bekasi (contoh)', kecamatan: 'Bekasi Utara', skor: 0.69 },
+  jumlah: 25,
+  teratas: { lokasi: 'MDL-001 — Kranji, Bekasi Barat (contoh)', terlayani800: 61728 },
 }
 
 // Kartu "Top 3 Rekomendasi AI" (mockup PRD Gambar 6 / Bab 10.2). Sumber:
@@ -225,29 +231,32 @@ export default function Dashboard() {
         setUsingDemo(false)
       })
 
-    // Kartu "Usulan Halte Prioritas" — jumlah titik_kandidat halte baru
-    // tersurvei + titik dengan skor CAI tertinggi. Membaca hasil skor_cai
-    // yang sudah dihitung data-ai-analyst, tidak menghitung ulang formula.
+    // Kartu "Usulan Halte Prioritas" — usulan_halte_model (migration 028),
+    // BUKAN titik_kandidat (itu titik survei lapangan, lihat catatan di
+    // DEMO_USULAN_HALTE). ranking 1 = proyeksi penduduk terlayani terbesar,
+    // sudah dihitung data-ai-analyst lewat simulate_new_stop — frontend hanya
+    // membaca, tidak menghitung ulang.
     supabase
-      .from('titik_kandidat')
-      .select('id, deskripsi_lokasi, kecamatan, skor_cai(skor_final)')
+      .from('usulan_halte_model')
+      .select('kode, kelurahan, kecamatan, penduduk_terlayani_800m, ranking')
+      .order('ranking', { ascending: true })
       .limit(500)
       .then(({ data: rows, error }) => {
         if (error || !rows?.length) {
           setUsingDemoUsulan(true)
           return
         }
-        const withSkor = rows
-          .map((r) => {
-            const s = Array.isArray(r.skor_cai) ? r.skor_cai[0] : r.skor_cai
-            return { ...r, skor: s?.skor_final != null ? Number(s.skor_final) : null }
-          })
-          .sort((a, b) => (b.skor ?? -1) - (a.skor ?? -1))
-        const top = withSkor[0]
+        const top = rows[0]
         setUsulanHalte({
           jumlah: rows.length,
           teratas: top
-            ? { lokasi: top.deskripsi_lokasi, kecamatan: top.kecamatan, skor: top.skor }
+            ? {
+                lokasi: [top.kode, [top.kelurahan, top.kecamatan].filter(Boolean).join(', ')]
+                  .filter(Boolean)
+                  .join(' — '),
+                terlayani800:
+                  top.penduduk_terlayani_800m != null ? Number(top.penduduk_terlayani_800m) : null,
+              }
             : null,
         })
         setUsingDemoUsulan(false)
@@ -451,19 +460,19 @@ export default function Dashboard() {
           icon={Bus}
           label="Usulan Halte Prioritas"
           value={fmtInt(usulanHalte.jumlah)}
-          unit="titik kandidat tersurvei"
+          unit="usulan dari model spasial"
           sub={
             usulanHalte.teratas
-              ? `Teratas: ${truncate(usulanHalte.teratas.lokasi, 34)}${
-                  usulanHalte.teratas.skor != null
-                    ? ` · CAI ${fmtDec(usulanHalte.teratas.skor)}`
+              ? `Teratas: ${truncate(usulanHalte.teratas.lokasi, 32)}${
+                  usulanHalte.teratas.terlayani800 != null
+                    ? ` · ${fmtInt(usulanHalte.teratas.terlayani800)} jiwa (800 m)`
                     : ''
                 }`
-              : 'Belum ada titik kandidat berskor'
+              : 'Belum ada usulan model'
           }
           usingDemo={usingDemoUsulan}
-          demoHint="Sambungkan tabel titik_kandidat + skor_cai untuk data asli"
-          hint="Jumlah baris titik_kandidat; teratas = skor_final CAI tertinggi"
+          demoHint="Sambungkan tabel usulan_halte_model untuk data asli"
+          hint="Baris usulan_halte_model: sel transit desert (TDI > 0,6) ≥400 m dari halte, de-klaster 800 m, dampak dari RPC simulate_new_stop. BELUM disurvei lapangan — beda dari titik survei di peta."
         />
       </div>
 
