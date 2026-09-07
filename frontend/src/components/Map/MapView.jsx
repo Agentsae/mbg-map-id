@@ -74,6 +74,7 @@ export default function MapView({
   simulationMode = false,
   onMapClick,
   markers = [],
+  clickMarker = null,
   layers = [],
   onMapReady,
   children,
@@ -81,6 +82,7 @@ export default function MapView({
   const containerRef = useRef(null)
   const mapRef = useRef(null)
   const markerRefs = useRef([])
+  const clickMarkerRef = useRef(null)
   const layerIdsRef = useRef([])
   // onMapReady disimpan di ref supaya effect init (mount-only) tidak perlu
   // memasukkannya ke dependency array.
@@ -163,43 +165,68 @@ export default function MapView({
     map.getCanvas().style.cursor = simulationMode ? 'crosshair' : ''
   }, [simulationMode])
 
-  // Render markers setiap kali prop markers berubah
+  // Buat satu Marker MapLibre dari spec {lat, lon, color?, popupHtml?,
+  // popupText?, onClick?}. CATATAN maplibre-gl 6.x: setPopup() TIDAK lagi
+  // meng-toggle popup saat marker diklik (hanya keypress Space/Enter) — jadi
+  // toggle-nya harus dipasang manual di sini, kalau tidak popup tidak pernah
+  // muncul saat diklik.
+  const createMarker = (map, m) => {
+    const el = document.createElement('div')
+    el.style.width = '14px'
+    el.style.height = '14px'
+    el.style.borderRadius = '50%'
+    el.style.border = '2px solid white'
+    el.style.boxShadow = '0 1px 3px rgba(0,0,0,0.4)'
+    el.style.background = m.color || '#1B659D'
+
+    const marker = new Marker({ element: el }).setLngLat([m.lon, m.lat])
+    const hasPopup = !!(m.popupHtml || m.popupText)
+    if (m.popupHtml) marker.setPopup(new Popup({ offset: 12 }).setHTML(m.popupHtml))
+    else if (m.popupText) marker.setPopup(new Popup({ offset: 12 }).setText(m.popupText))
+
+    if (hasPopup || m.onClick) {
+      el.style.cursor = 'pointer'
+      el.addEventListener('click', (ev) => {
+        // Jangan biarkan klik marker jatuh ke handler klik-peta (mode simulasi /
+        // cek CAI di koordinat lain).
+        ev.stopPropagation()
+        // Kalau marker punya aksi khusus (mis. titik kandidat -> buka panel
+        // skor CAI), itu yang jalan; kalau tidak, toggle popup info.
+        if (m.onClick) m.onClick()
+        else if (hasPopup) marker.togglePopup()
+      })
+    }
+
+    marker.addTo(map)
+    return marker
+  }
+
+  // Marker persisten (halte, titik kandidat, dll). markers WAJIB stabil-refs
+  // dari pemanggil (useMemo di App.jsx) — kalau array baru tiap render, marker
+  // + popup yang sedang terbuka ikut dibongkar-pasang tiap render.
   useEffect(() => {
     const map = mapRef.current
     if (!map) return
-
-    markerRefs.current.forEach((m) => m.remove())
-    markerRefs.current = markers.map((m) => {
-      const el = document.createElement('div')
-      el.style.width = '14px'
-      el.style.height = '14px'
-      el.style.borderRadius = '50%'
-      el.style.border = '2px solid white'
-      el.style.boxShadow = '0 1px 3px rgba(0,0,0,0.4)'
-      el.style.background = m.color || '#1B659D'
-
-      const marker = new Marker({ element: el }).setLngLat([m.lon, m.lat])
-
-      if (m.popupHtml) {
-        marker.setPopup(new Popup({ offset: 12 }).setHTML(m.popupHtml))
-      } else if (m.popupText) {
-        marker.setPopup(new Popup({ offset: 12 }).setText(m.popupText))
-      }
-
-      if (m.onClick) {
-        el.style.cursor = 'pointer'
-        el.addEventListener('click', (ev) => {
-          // Hentikan propagasi supaya klik marker tidak juga dihitung sebagai
-          // klik peta biasa (mis. memicu mode simulasi di koordinat lain).
-          ev.stopPropagation()
-          m.onClick()
-        })
-      }
-
-      marker.addTo(map)
-      return marker
-    })
+    markerRefs.current.forEach((mk) => mk.remove())
+    markerRefs.current = markers.map((m) => createMarker(map, m))
+    return () => {
+      markerRefs.current.forEach((mk) => mk.remove())
+      markerRefs.current = []
+    }
   }, [markers])
+
+  // Marker transient "lokasi yang baru diklik" — effect terpisah supaya
+  // perubahannya (tiap klik) tidak membongkar marker persisten di atas.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) return
+    clickMarkerRef.current?.remove()
+    clickMarkerRef.current = clickMarker ? createMarker(map, clickMarker) : null
+    return () => {
+      clickMarkerRef.current?.remove()
+      clickMarkerRef.current = null
+    }
+  }, [clickMarker])
 
   // Sinkronisasi layer GeoJSON generik (mis. grid kepadatan, jaringan transit,
   // indeks gap aksesibilitas untuk Analisis Spasial). addSource/addLayer harus

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   LayoutDashboard,
   Map as MapIcon,
@@ -25,7 +25,7 @@ import DataLaporan from './components/DataLaporan/DataLaporan'
 import LoginPage from './components/Auth/LoginPage'
 import Pengaturan from './components/Pengaturan/Pengaturan'
 import { supabase, isConfigured } from './lib/supabaseClient'
-import { extractLatLon, extractLineStringCoords, findNearestPoint } from './lib/geo'
+import { extractLatLon, extractLineStringCoords, findNearestPoint, haversineMeters } from './lib/geo'
 import { isSurveyPlaceholderPoint } from './lib/titikKandidat'
 import { isDummyHalte } from './lib/halteEksisting'
 
@@ -573,34 +573,42 @@ export default function App() {
   // diklik bebas (kalau ada). Klik langsung pada marker titik kandidat memanggil
   // handleMapClick di koordinat titik itu sendiri (nearest-search akan
   // menemukan dirinya sendiri, distance ~0m).
-  const candidateMarkers = caiPoints.points.map((p) => ({
-    lat: p.lat,
-    lon: p.lon,
-    color: isSurveyPlaceholderPoint(p.titik?.id_titik_survei)
-      ? CANDIDATE_MARKER_COLOR_PLACEHOLDER
-      : CANDIDATE_MARKER_COLOR,
-    popupHtml: buildCandidatePopupHtml(p.titik),
-    onClick: () => handleMapClick({ lat: p.lat, lon: p.lon }),
-  }))
+  // Di-useMemo supaya identitas array marker STABIL antar-render (kalau tidak,
+  // MapView membongkar-pasang seluruh marker + popup terbuka tiap kali App
+  // re-render — mis. saat fetch data selesai / panel skor dibuka).
+  const candidateMarkers = useMemo(
+    () =>
+      caiPoints.points.map((p) => ({
+        lat: p.lat,
+        lon: p.lon,
+        color: isSurveyPlaceholderPoint(p.titik?.id_titik_survei)
+          ? CANDIDATE_MARKER_COLOR_PLACEHOLDER
+          : CANDIDATE_MARKER_COLOR,
+        popupHtml: buildCandidatePopupHtml(p.titik),
+        // Klik titik kandidat -> buka panel skor CAI (bukan popup bubble).
+        onClick: () => handleMapClick({ lat: p.lat, lon: p.lon }),
+      })),
+    [caiPoints.points, handleMapClick],
+  )
 
-  // Marker halte tersurvei — warna ungu terpisah dari hijau/kuning titik
-  // kandidat di atas. onClick no-op (bukan () => undefined biasa) hanya untuk
-  // stopPropagation di MapView supaya klik marker tidak juga memicu
-  // handleMapClick di peta di baliknya (yang akan salah membuka panel skor
-  // CAI seolah halte ini adalah titik kandidat).
-  const halteMarkers = haltePoints.points.map((h) => ({
-    lat: h.lat,
-    lon: h.lon,
-    color: HALTE_TERSURVEI_MARKER_COLOR,
-    popupHtml: buildHaltePopupHtml(h),
-    onClick: () => {},
-  }))
+  // Marker halte tersurvei — ungu, klik menampilkan popup info (nama, kecamatan).
+  const halteMarkers = useMemo(
+    () =>
+      haltePoints.points.map((h) => ({
+        lat: h.lat,
+        lon: h.lon,
+        color: HALTE_TERSURVEI_MARKER_COLOR,
+        popupHtml: buildHaltePopupHtml(h),
+      })),
+    [haltePoints.points],
+  )
 
-  const markers = [
-    ...halteMarkers,
-    ...candidateMarkers,
-    ...(clickMarker ? [clickMarker] : []),
-  ]
+  // clickMarker TIDAK digabung di sini — dikirim sebagai prop terpisah ke
+  // MapView supaya perubahannya tiap klik tidak ikut membongkar marker persisten.
+  const markers = useMemo(
+    () => [...halteMarkers, ...candidateMarkers],
+    [halteMarkers, candidateMarkers],
+  )
 
   // Layer garis rute transit eksisting — 2 layer terpisah dengan visual jelas
   // berbeda (lihat konstanta warna RUTE_BISKITA_COLOR/RUTE_KRL_COLOR di atas).
@@ -638,6 +646,24 @@ export default function App() {
   //   2. rute transit eksisting tersurvei (ruteLayers)
   //   3. titik halte BisKita OSM (circle kecil) — di atas garis rute
   //   4. garis batas Kota Bekasi — TERAKHIR, selalu di atas layer lain
+  // De-dup layer halte OSM terhadap halte tersurvei: 15 halte tersurvei
+  // (halte_eksisting) adalah SUBSET dari ~32 titik OSM koridor yang sama, jadi
+  // titik OSM yang berhimpit dengan halte tersurvei adalah halte yang SAMA —
+  // menampilkannya lagi sebagai "belum disurvei" itu dobel + salah label.
+  // Ambang 100 m: pada data saat ini 8 titik berhimpit < 20 m + "Revo Mall"
+  // ~98 m (nama sama, jelas titik yang sama), lalu tidak ada lagi sampai
+  // > 150 m — jadi 100 m memisahkan dup sejati dari halte berbeda dgn bersih.
+  const biskitaHalteOsmFiltered = useMemo(() => {
+    const surveyed = haltePoints.points.filter((h) => h.lat != null && h.lon != null)
+    if (!surveyed.length) return biskitaHalteOsm
+    const features = (biskitaHalteOsm.features || []).filter((f) => {
+      const [lon, lat] = f.geometry?.coordinates || []
+      if (lat == null || lon == null) return true
+      return !surveyed.some((h) => haversineMeters({ lat, lon }, h) < 100)
+    })
+    return { ...biskitaHalteOsm, features }
+  }, [haltePoints.points])
+
   // Semua display-only, selalu tampil (konteks dasar), tidak perlu toggle.
   const mapLayers = [
     {
@@ -656,7 +682,7 @@ export default function App() {
     {
       id: 'biskita-halte-osm',
       type: 'circle',
-      data: biskitaHalteOsm,
+      data: biskitaHalteOsmFiltered,
       paint: {
         'circle-radius': 3.5,
         'circle-color': HALTE_BISKITA_OSM_COLOR,
@@ -837,6 +863,7 @@ export default function App() {
             simulationMode={simulationActive}
             onMapClick={handleMapClick}
             markers={markers}
+            clickMarker={clickMarker}
             layers={mapLayers}
           >
             <CaiScorePanel
