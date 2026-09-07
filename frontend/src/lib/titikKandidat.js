@@ -1,13 +1,15 @@
 // titikKandidat.js — util kecil untuk membedakan titik_kandidat "lama" (demo/awal)
 // dari titik_kandidat hasil Form Traffic Counting (batch KND-0NN) yang merupakan
-// LOKASI USULAN BARU: n_survei = 0 karena belum ada halte/infrastruktur transit
-// eksisting untuk dinilai lewat Form Kondisi Halte. Kriteria lain sudah data
-// riil — n_kepadatan dari spatial join ke grid_analisis (dasymetric DKB Sem I
-// 2026, lihat etl/attach_kepadatan_titik_kandidat.py), jarak & volume dari
+// LOKASI USULAN HALTE BARU: kriteria CAI "skor survei kondisi halte" N/A —
+// belum ada halte eksisting untuk dinilai lewat Form Kondisi Halte, jadi
+// kriteria itu dikeluarkan dari WLC dan 3 bobot AHP sisanya direnormalisasi
+// (skor_cai.n_survei & bobot_survei = NULL; keputusan tim 2026-09-07). Kriteria
+// lain sudah data riil — n_kepadatan dari spatial join grid_analisis
+// (dasymetric DKB Sem I 2026), jarak dari ST_Distance geom->POI, volume dari
 // traffic counting lapangan.
 //
 // Kenapa perlu dibedakan: prinsip "setiap skor harus bisa ditelusuri" (CLAUDE.md)
-// berarti UI wajib transparan bahwa komponen survei titik-titik ini = 0
+// berarti UI wajib transparan bahwa kriteria survei di titik-titik ini N/A
 // by design (bukan lokasi berinfrastruktur yang skornya jelek) — bukan
 // menyembunyikannya.
 

@@ -163,8 +163,9 @@ const DEMO_RUTE_TRANSIT_DISCLAIMER =
   'Data contoh — belum tersambung ke tabel rute_transit_eksisting.'
 
 // Warna marker titik_kandidat di peta — dibedakan sederhana antara titik yang
-// keempat kriteria CAI-nya terisi vs lokasi USULAN BARU yang skor survei
-// lapangannya = 0 (belum ada halte eksisting untuk dinilai — lihat
+// keempat kriteria CAI-nya terisi vs lokasi USULAN BARU yang kriteria "skor
+// survei kondisi halte"-nya N/A — belum ada halte eksisting untuk dinilai,
+// jadi kriteria itu dikeluarkan & 3 bobot AHP sisanya direnormalisasi (lihat
 // isSurveyPlaceholderPoint; kepadatan/jarak/volume-nya sudah data riil).
 // TODO(ui-ux-designer): ini asumsi sementara, bukan keputusan desain final.
 const CANDIDATE_MARKER_COLOR = '#2E7D5B'
@@ -221,7 +222,7 @@ function buildCandidatePopupHtml(titik) {
   const wilayah = [titik?.kelurahan, titik?.kecamatan].filter(Boolean).join(', ')
   if (wilayah) lines.push(escapeHtml(wilayah))
   if (isSurveyPlaceholderPoint(titik?.id_titik_survei)) {
-    lines.push('<em>Lokasi usulan baru — skor survei lapangan = 0 (belum ada halte eksisting)</em>')
+    lines.push('<em>Lokasi usulan halte baru — kriteria "skor survei kondisi halte" N/A (belum ada halte eksisting)</em>')
   }
   if (titik?.catatan) {
     lines.push(escapeHtml(titik.catatan))
@@ -857,7 +858,7 @@ export default function App() {
                   { color: HALTE_BISKITA_OSM_COLOR, shape: 'dot', label: 'Halte BisKita (OSM, belum disurvei)' },
                   { color: RUTE_KRL_COLOR, shape: 'line', lineStyle: 'dashed', label: 'Jaringan KRL (eksis, belum disurvei)' },
                   { color: CANDIDATE_MARKER_COLOR, shape: 'dot', label: 'Usulan lokasi baru (4 kriteria CAI terisi)' },
-                  { color: CANDIDATE_MARKER_COLOR_PLACEHOLDER, shape: 'dot', label: 'Usulan lokasi baru (skor survei = 0, belum ada halte)' },
+                  { color: CANDIDATE_MARKER_COLOR_PLACEHOLDER, shape: 'dot', label: 'Usulan lokasi baru (skor survei kondisi halte N/A)' },
                 ]}
               />
             )}
