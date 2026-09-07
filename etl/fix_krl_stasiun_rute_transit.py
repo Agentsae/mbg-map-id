@@ -45,11 +45,13 @@ import argparse
 from upload_to_supabase import get_client
 
 SUMBER_STASIUN = (
-    "Koordinat manual referensi publik (OpenStreetMap / PT KAI Commuter) — "
-    "titik stasiun KRL Commuter Line Lin Cikarang di dalam Kota Bekasi. "
-    "STASIUNKA_PT_25K RBI 25K hanya meloloskan 1 titik tanpa NAMOBJ saat "
-    "clip 'within' batas kota (build_rute_transit_eksisting.py), sehingga 3 "
-    "stasiun in-city ditambahkan manual di fix_krl_stasiun_rute_transit.py."
+    "Stasiun Bekasi & Bekasi Timur: koordinat di-anchor ke titik survei "
+    "lapangan tim (KND-003 'Akses Masuk Stasiun Bekasi', KND-002 'Area "
+    "Parkir Stasiun Bekasi Timur' di titik_kandidat — GPS survei). Kranji: "
+    "koordinat pendekatan peta publik (OpenStreetMap), tidak ada titik "
+    "survei. STASIUNKA_PT_25K RBI 25K hanya meloloskan 1 titik tanpa NAMOBJ "
+    "saat clip 'within' batas kota (build_rute_transit_eksisting.py), "
+    "sehingga 3 stasiun in-city ditambahkan manual di sini."
 )
 CATATAN_STASIUN = (
     "Stasiun KRL Commuter Line eksisting (Lin Cikarang). BELUM disurvei "
@@ -59,12 +61,18 @@ CATATAN_STASIUN = (
     "tidak dipakai untuk skoring CAI/TDI/Equity."
 )
 
-# nama, (lon, lat) — koordinat peron referensi publik, sudah dicek
-# point-in-polygon jatuh di dalam union 56 kelurahan RBI Kota Bekasi.
+# nama, (lon, lat). Bekasi & Bekasi Timur di-anchor ke koordinat survei tim
+# (titik_kandidat KND-003 / KND-002 — persis di akses stasiun). Kranji =
+# pendekatan peta publik. Semua sudah dicek jatuh di dalam union 56
+# kelurahan RBI Kota Bekasi.
+# CATATAN 2026-09-07: nilai lama ("Stasiun Bekasi" (106.9928, -6.2394))
+# ternyata koordinat DEMO placeholder lama (DEMO_RUTE_KRL_STASIUN di
+# App.jsx), ~750 m barat-daya stasiun asli — muncul sebagai titik biru
+# nyasar dekat GOR Patriot / Masjid. Diganti ke koordinat survei.
 STASIUN_KRL_KOTA_BEKASI = [
-    ("Stasiun Bekasi", (106.9928, -6.2394)),
-    ("Stasiun Bekasi Timur", (107.0181, -6.2469)),
-    ("Stasiun Kranji", (106.9707, -6.2197)),
+    ("Stasiun Bekasi", (106.998954, -6.236628)),       # = KND-003 (akses masuk stasiun)
+    ("Stasiun Bekasi Timur", (107.018111, -6.246888)),  # = KND-002 (area parkir stasiun)
+    ("Stasiun Kranji", (106.970620, -6.219290)),        # OSM approx, tanpa titik survei
 ]
 
 
