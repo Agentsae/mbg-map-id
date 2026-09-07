@@ -86,9 +86,10 @@ export default function CaiScorePanel({ loading, result, usingDemo, onClose }) {
 
           {isSurveyPlaceholderPoint(result.titik?.id_titik_survei) && (
             <div className="text-xs bg-amber-50 text-amber-800 border border-amber-200 rounded-md px-3 py-2">
-              *Kepadatan &amp; survei: data sementara (nilai netral/placeholder), menunggu data
-              kepadatan penduduk per titik (BPS) dan survei lapangan lengkap. Kriteria jarak &amp;
-              volume pada titik ini sudah dari hasil traffic counting lapangan.
+              *Skor survei lapangan = 0 karena ini <strong>lokasi usulan baru</strong> yang belum
+              berinfrastruktur transit — tidak ada halte eksisting untuk dinilai lewat Form Kondisi
+              Halte. Kriteria kepadatan, jarak &amp; volume sudah dari data riil (grid dasymetric
+              DKB Semester I 2026 + traffic counting lapangan).
             </div>
           )}
 

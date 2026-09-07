@@ -1,12 +1,15 @@
 // titikKandidat.js — util kecil untuk membedakan titik_kandidat "lama" (demo/awal)
-// dari titik_kandidat baru hasil Form Traffic Counting (batch KND-002..009, lihat
-// etl/upload_cai_titik_kandidat_batch2.py) yang sebagian kriteria CAI-nya masih
-// PROXY/PLACEHOLDER (n_kepadatan = nilai netral konstan, n_survei = 0 karena
-// belum ada infrastruktur eksisting untuk disurvei).
+// dari titik_kandidat hasil Form Traffic Counting (batch KND-0NN) yang merupakan
+// LOKASI USULAN BARU: n_survei = 0 karena belum ada halte/infrastruktur transit
+// eksisting untuk dinilai lewat Form Kondisi Halte. Kriteria lain sudah data
+// riil — n_kepadatan dari spatial join ke grid_analisis (dasymetric DKB Sem I
+// 2026, lihat etl/attach_kepadatan_titik_kandidat.py), jarak & volume dari
+// traffic counting lapangan.
 //
 // Kenapa perlu dibedakan: prinsip "setiap skor harus bisa ditelusuri" (CLAUDE.md)
-// berarti UI wajib transparan soal bagian mana dari skor_final yang final vs
-// sementara — bukan menyembunyikannya.
+// berarti UI wajib transparan bahwa komponen survei titik-titik ini = 0
+// by design (bukan lokasi berinfrastruktur yang skornya jelek) — bukan
+// menyembunyikannya.
 
 /**
  * True kalau id_titik_survei mengikuti pola batch traffic counting asli
