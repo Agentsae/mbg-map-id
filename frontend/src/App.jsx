@@ -570,7 +570,10 @@ export default function App() {
     // --- Alur skor CAI (klik lokasi -> cari titik_kandidat terdekat) ---
     setCaiLoading(true)
     setSimResult(null)
-    setClickMarker({ lat, lon, color: '#1B659D', popupText: 'Lokasi dicek' })
+    // Slate netral — sengaja BUKAN biru, supaya marker transient "titik yang
+    // baru diklik" tidak tertukar dengan marker stasiun KRL (RUTE_KRL_COLOR,
+    // biru) yang bentuk & ukurannya sama. Marker simulasi sudah oranye.
+    setClickMarker({ lat, lon, color: '#334155', popupText: 'Lokasi dicek' })
 
     const nearest = findNearestPoint(caiPoints.points, { lat, lon })
 
