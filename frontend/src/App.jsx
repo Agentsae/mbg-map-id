@@ -159,9 +159,6 @@ const DEMO_RUTE_KRL_GEOJSON = {
     },
   ],
 }
-const DEMO_RUTE_KRL_STASIUN = [
-  { lat: -6.2394, lon: 106.9928, nama: 'Stasiun Bekasi (contoh)' },
-]
 const DEMO_RUTE_TRANSIT_DISCLAIMER =
   'Data contoh — belum tersambung ke tabel rute_transit_eksisting.'
 
@@ -268,18 +265,6 @@ function buildBiskitaPopupHtml(catatan) {
 function buildKrlPopupHtml(catatan) {
   const lines = [
     '<strong>Jalur KRL Commuter Line</strong>',
-    '<span style="color:#64748b">Infrastruktur eksis — belum disurvei lapangan oleh tim</span>',
-  ]
-  if (catatan) lines.push(escapeHtml(catatan))
-  return lines.join('<br/>')
-}
-
-// Popup marker titik stasiun KRL — nama kolom `nama` di database untuk baris
-// ini kosong (spasi), jadi WAJIB fallback teks generik supaya popup tidak
-// blank (bukan bug, memang begitu datanya — lihat docs/DATA_CHECKLIST.md).
-function buildKrlStasiunPopupHtml(nama, catatan) {
-  const lines = [
-    `<strong>${escapeHtml(nama?.trim() ? nama.trim() : 'Stasiun KRL Commuter Line')}</strong>`,
     '<span style="color:#64748b">Infrastruktur eksis — belum disurvei lapangan oleh tim</span>',
   ]
   if (catatan) lines.push(escapeHtml(catatan))
@@ -407,23 +392,20 @@ export default function App() {
       })
   }, [])
 
-  // Rute transit eksisting — 2 layer terpisah dari tabel rute_transit_eksisting
+  // Rute transit eksisting — 2 layer garis dari tabel rute_transit_eksisting
   // (migration 013): koridor BisKita TERSURVEI (jenis='biskita_survei',
   // LineString) dan jaringan KRL yang EKSIS TAPI BELUM DISURVEI tim
-  // (jenis='krl', campuran LineString ruas rel + Point stasiun). Fetch sekali
-  // di awal, sama polanya dengan haltePoints/caiPoints di atas. `nama` untuk
-  // sebagian baris krl memang kosong di database (bukan bug) — popup builder
-  // di atas (buildKrlPopupHtml/buildKrlStasiunPopupHtml) sudah fallback ke
-  // teks generik supaya tidak blank.
+  // (jenis='krl', LineString ruas rel). Titik stasiun KRL TIDAK dirender
+  // sebagai marker: jejak rel sudah cukup jadi konteks, basemap MAPID sendiri
+  // sudah menampilkan ikon stasiun, dan marker titik sempat salah lokasi /
+  // membingungkan (dihapus 2026-09-07 atas permintaan Sam). Fetch sekali di
+  // awal, sama polanya dengan haltePoints/caiPoints. `nama` sebagian baris krl
+  // memang kosong — buildKrlPopupHtml sudah fallback teks generik.
   const [ruteTransit, setRuteTransit] = useState({
     biskitaGeoJSON: DEMO_RUTE_BISKITA_GEOJSON,
     biskitaPopupHtml: buildBiskitaPopupHtml(DEMO_RUTE_TRANSIT_DISCLAIMER),
     krlLinesGeoJSON: DEMO_RUTE_KRL_GEOJSON,
     krlPopupHtml: buildKrlPopupHtml(DEMO_RUTE_TRANSIT_DISCLAIMER),
-    krlStasiunPoints: DEMO_RUTE_KRL_STASIUN.map((s) => ({
-      ...s,
-      popupHtml: buildKrlStasiunPopupHtml(s.nama, DEMO_RUTE_TRANSIT_DISCLAIMER),
-    })),
     usingDemo: !isConfigured,
   })
 
@@ -439,7 +421,6 @@ export default function App() {
 
         const biskitaRows = data.filter((r) => r.jenis === 'biskita_survei' && r.tipe_geometri === 'line')
         const krlLineRows = data.filter((r) => r.jenis === 'krl' && r.tipe_geometri === 'line')
-        const krlPointRows = data.filter((r) => r.jenis === 'krl' && r.tipe_geometri === 'point')
 
         const toLineFeatures = (rows) =>
           rows
@@ -457,18 +438,6 @@ export default function App() {
         const biskitaFeatures = toLineFeatures(biskitaRows)
         const krlLineFeatures = toLineFeatures(krlLineRows)
 
-        const krlStasiunPoints = krlPointRows
-          .map((row) => {
-            const coords = extractLatLon(row.geom)
-            if (!coords) return null
-            return {
-              ...coords,
-              nama: row.nama,
-              popupHtml: buildKrlStasiunPopupHtml(row.nama, row.catatan),
-            }
-          })
-          .filter(Boolean)
-
         setRuteTransit({
           biskitaGeoJSON: biskitaFeatures.length
             ? { type: 'FeatureCollection', features: biskitaFeatures }
@@ -477,9 +446,8 @@ export default function App() {
           krlLinesGeoJSON: krlLineFeatures.length
             ? { type: 'FeatureCollection', features: krlLineFeatures }
             : DEMO_RUTE_KRL_GEOJSON,
-          krlPopupHtml: buildKrlPopupHtml(krlLineRows[0]?.catatan ?? krlPointRows[0]?.catatan),
-          krlStasiunPoints: krlStasiunPoints.length ? krlStasiunPoints : DEMO_RUTE_KRL_STASIUN,
-          usingDemo: !(biskitaFeatures.length || krlLineFeatures.length || krlStasiunPoints.length),
+          krlPopupHtml: buildKrlPopupHtml(krlLineRows[0]?.catatan),
+          usingDemo: !(biskitaFeatures.length || krlLineFeatures.length),
         })
       })
   }, [])
@@ -570,9 +538,8 @@ export default function App() {
     // --- Alur skor CAI (klik lokasi -> cari titik_kandidat terdekat) ---
     setCaiLoading(true)
     setSimResult(null)
-    // Slate netral — sengaja BUKAN biru, supaya marker transient "titik yang
-    // baru diklik" tidak tertukar dengan marker stasiun KRL (RUTE_KRL_COLOR,
-    // biru) yang bentuk & ukurannya sama. Marker simulasi sudah oranye.
+    // Slate netral — marker transient "titik yang baru diklik", sengaja bukan
+    // warna layer data mana pun. Marker simulasi sudah oranye.
     setClickMarker({ lat, lon, color: '#334155', popupText: 'Lokasi dicek' })
 
     const nearest = findNearestPoint(caiPoints.points, { lat, lon })
@@ -628,21 +595,8 @@ export default function App() {
     onClick: () => {},
   }))
 
-  // Marker titik stasiun KRL (jenis='krl', tipe_geometri='point') — sama pola
-  // stopPropagation seperti halteMarkers, warna biru RUTE_KRL_COLOR terpisah
-  // dari ungu halte tersurvei supaya beda status "eksis tapi belum disurvei"
-  // langsung terlihat tanpa buka popup dulu.
-  const krlStasiunMarkers = ruteTransit.krlStasiunPoints.map((s) => ({
-    lat: s.lat,
-    lon: s.lon,
-    color: RUTE_KRL_COLOR,
-    popupHtml: s.popupHtml,
-    onClick: () => {},
-  }))
-
   const markers = [
     ...halteMarkers,
-    ...krlStasiunMarkers,
     ...candidateMarkers,
     ...(clickMarker ? [clickMarker] : []),
   ]

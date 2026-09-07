@@ -310,54 +310,13 @@ def load_kota_bekasi_boundary(client) -> gpd.GeoDataFrame:
 def build_krl_records(gdb_path: str, boundary_union) -> list:
     records = []
 
-    stasiun = gpd.read_file(gdb_path, layer=LAYER_STASIUN)
-    stasiun["geometry"] = stasiun.geometry.force_2d()
-    stasiun = stasiun.set_crs(epsg=4326, allow_override=True)
-
-    # Batas kota di-buffer +STASIUN_BOUNDARY_BUFFER_M (di CRS metrik, lalu balik
-    # ke 4326) supaya peron yang persis di tepi batas RBI ikut terpilih — lihat
-    # komentar di STASIUN_BOUNDARY_BUFFER_M.
-    boundary_buffered = (
-        gpd.GeoSeries([boundary_union], crs="EPSG:4326")
-        .to_crs(METRIC_CRS)
-        .buffer(STASIUN_BOUNDARY_BUFFER_M)
-        .to_crs("EPSG:4326")
-        .iloc[0]
-    )
-    stasiun_clip = stasiun[stasiun.geometry.intersects(boundary_buffered)]
-    print(
-        f"[B2] {LAYER_STASIUN}: {len(stasiun)} total di .gdb, {len(stasiun_clip)} "
-        f"beririsan dgn batas Kota Bekasi (buffer +{STASIUN_BOUNDARY_BUFFER_M}m)."
-    )
-
-    nama_col_stasiun = "NAMOBJ" if "NAMOBJ" in stasiun_clip.columns else None
-    n_tanpa_nama = 0
-    for _, row in stasiun_clip.iterrows():
-        nama = (row[nama_col_stasiun] if nama_col_stasiun else None)
-        nama = nama.strip() if isinstance(nama, str) else nama
-        if not nama:
-            # Titik stasiun tanpa NAMOBJ = tidak berguna sebagai layer peta
-            # (dulu inilah satu-satunya titik yang lolos, muncul sbg dot biru
-            # nyasar tanpa nama). Dibuang, bukan diberi nama generik.
-            n_tanpa_nama += 1
-            continue
-        records.append({
-            "nama": nama,
-            "jenis": "krl",
-            "tipe_geometri": "point",
-            "geom": f"SRID=4326;{row.geometry.wkt}",
-            "sumber": SUMBER_KRL,
-            "catatan": CATATAN_KRL,
-        })
-    if n_tanpa_nama:
-        print(f"[B2] {n_tanpa_nama} titik stasiun tanpa NAMOBJ dibuang (tidak berguna sbg layer peta).")
-    n_stasiun = sum(1 for r in records if r["tipe_geometri"] == "point")
-    if n_stasiun == 0:
-        print(
-            "[PERINGATAN] 0 titik stasiun KRL bernama lolos dari .gdb ini. "
-            "Jalankan etl/fix_krl_stasiun_rute_transit.py --upload untuk menambah "
-            "Stasiun Bekasi / Bekasi Timur / Kranji secara manual."
-        )
+    # TITIK STASIUN KRL SENGAJA TIDAK DIBANGUN (keputusan Sam 2026-09-07).
+    # Jejak garis rel di bawah + ikon stasiun bawaan basemap MAPID sudah cukup;
+    # marker titik stasiun sebelumnya salah lokasi & membingungkan (biru,
+    # sebentuk marker "Lokasi dicek"). LAYER_STASIUN / STASIUN_BOUNDARY_BUFFER_M
+    # dibiarkan terdefinisi kalau suatu saat keputusan ini dibalik.
+    # Kalau .gdb di-rerun dan tabel sudah terisi titik lama, jalankan
+    # etl/fix_krl_stasiun_rute_transit.py --upload (DELETE-only) untuk bersih.
 
     rel = gpd.read_file(gdb_path, layer=LAYER_REL)
     rel["geometry"] = rel.geometry.force_2d()

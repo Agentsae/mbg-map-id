@@ -2,15 +2,19 @@
 fix_krl_stasiun_rute_transit.py — GeoTransit Insight
 Tim MBG — MAPID WebGIS Competition 2026
 
-Perbaiki titik stasiun KRL di tabel `rute_transit_eksisting`
-(jenis='krl', tipe_geometri='point').
+HAPUS semua titik stasiun KRL di tabel `rute_transit_eksisting`
+(jenis='krl', tipe_geometri='point') — TIDAK diganti.
 
-MASALAH (diverifikasi 2026-09-07):
-  Hanya ADA 1 baris jenis='krl'/tipe_geometri='point', kolom `nama` KOSONG
-  (spasi), koordinat [106.9520, -6.2192] — ujung barat trace jalur KRL,
-  ~3,3 km dari Stasiun Cakung, ~2 km dari Stasiun Kranji, TIDAK di peron
-  mana pun. Di peta muncul sebagai titik biru nyasar tanpa nama dekat
-  Cakung. Popup frontend jatuh ke teks generik "Stasiun KRL Commuter Line".
+KEPUTUSAN SAM 2026-09-07: marker titik stasiun KRL dibuang total dari peta.
+  - Jejak garis rel (jenis='krl'/'line') sudah cukup jadi konteks spasial.
+  - Basemap MAPID sendiri sudah menampilkan ikon stasiun KRL.
+  - Riwayat marker ini bermasalah: awalnya 1 baris tanpa nama di ujung
+    barat trace rel (bukan di peron), lalu sempat diganti 3 stasiun yang
+    salah satunya (Stasiun Bekasi) memakai koordinat DEMO lama ~750 m
+    meleset. Warna birunya juga sebentuk dengan marker "Lokasi dicek" —
+    sumber kebingungan berulang. Lebih bersih dihapus.
+
+Frontend (App.jsx) juga sudah berhenti me-render krlStasiunMarkers.
 
 PENYEBAB: build_rute_transit_eksisting.py membaca STASIUNKA_PT_25K dari RBI
 25K .gdb lalu clip `stasiun.geometry.within(boundary_union)` — dengan batas
@@ -61,19 +65,16 @@ CATATAN_STASIUN = (
     "tidak dipakai untuk skoring CAI/TDI/Equity."
 )
 
-# nama, (lon, lat). Bekasi & Bekasi Timur di-anchor ke koordinat survei tim
-# (titik_kandidat KND-003 / KND-002 — persis di akses stasiun). Kranji =
-# pendekatan peta publik. Semua sudah dicek jatuh di dalam union 56
-# kelurahan RBI Kota Bekasi.
-# CATATAN 2026-09-07: nilai lama ("Stasiun Bekasi" (106.9928, -6.2394))
-# ternyata koordinat DEMO placeholder lama (DEMO_RUTE_KRL_STASIUN di
-# App.jsx), ~750 m barat-daya stasiun asli — muncul sebagai titik biru
-# nyasar dekat GOR Patriot / Masjid. Diganti ke koordinat survei.
-STASIUN_KRL_KOTA_BEKASI = [
-    ("Stasiun Bekasi", (106.998954, -6.236628)),       # = KND-003 (akses masuk stasiun)
-    ("Stasiun Bekasi Timur", (107.018111, -6.246888)),  # = KND-002 (area parkir stasiun)
-    ("Stasiun Kranji", (106.970620, -6.219290)),        # OSM approx, tanpa titik survei
-]
+# KOSONG per keputusan Sam 2026-09-07: titik stasiun KRL sebagai marker
+# dihapus seluruhnya, TIDAK diganti.
+#   - Jejak garis rel (jenis='krl'/'line', 13 ruas) sudah cukup jadi konteks.
+#   - Basemap MAPID sendiri sudah menampilkan ikon stasiun KRL.
+#   - Marker titik sempat salah lokasi (nilai awal = koordinat DEMO lama)
+#     dan membingungkan (biru, sebentuk dengan marker "Lokasi dicek").
+# Script ini sekarang = DELETE semua krl/point, INSERT nol. Tetap idempotent
+# dan tetap berguna kalau build_rute_transit_eksisting.py suatu saat
+# di-rerun dengan .gdb asli yang mungkin memproduksi titik stasiun lagi.
+STASIUN_KRL_KOTA_BEKASI = []
 
 
 def build_records() -> list:
@@ -127,8 +128,11 @@ if __name__ == "__main__":
 
     del_res = client.table("rute_transit_eksisting").delete().eq("jenis", "krl").eq("tipe_geometri", "point").execute()
     print(f"\n[APPLY] DELETE krl/point: {len(del_res.data)} baris terhapus.")
-    ins_res = client.table("rute_transit_eksisting").insert(records).execute()
-    print(f"[APPLY] INSERT krl/point: {len(ins_res.data)} baris.")
+    if records:
+        ins_res = client.table("rute_transit_eksisting").insert(records).execute()
+        print(f"[APPLY] INSERT krl/point: {len(ins_res.data)} baris.")
+    else:
+        print("[APPLY] INSERT krl/point: 0 baris (STASIUN_KRL_KOTA_BEKASI kosong — sengaja).")
 
     after = (
         client.table("rute_transit_eksisting")
