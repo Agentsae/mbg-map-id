@@ -26,7 +26,6 @@ import LoginPage from './components/Auth/LoginPage'
 import Pengaturan from './components/Pengaturan/Pengaturan'
 import { supabase, isConfigured } from './lib/supabaseClient'
 import { extractLatLon, extractLineStringCoords, findNearestPoint, haversineMeters } from './lib/geo'
-import { isSurveyPlaceholderPoint } from './lib/titikKandidat'
 import { isDummyHalte } from './lib/halteEksisting'
 
 // Batas area studi (outline Kota Bekasi) — aset STATIS yang di-bundle saat
@@ -46,11 +45,13 @@ import bekasiBoundaryRaw from './data/bekasi_boundary.geojson?raw'
 import biskitaKoridorOsmRaw from './data/biskita_koridor_osm.geojson?raw'
 import biskitaHalteOsmRaw from './data/biskita_halte_osm.geojson?raw'
 import stasiunKotaBekasiRaw from './data/stasiun_kota_bekasi.geojson?raw'
+import lrtJabodebekOsmRaw from './data/lrt_jabodebek_osm.geojson?raw'
 
 const bekasiBoundary = JSON.parse(bekasiBoundaryRaw)
 const biskitaKoridorOsm = JSON.parse(biskitaKoridorOsmRaw)
 const biskitaHalteOsm = JSON.parse(biskitaHalteOsmRaw)
 const stasiunKotaBekasi = JSON.parse(stasiunKotaBekasiRaw)
+const lrtJabodebekOsm = JSON.parse(lrtJabodebekOsmRaw)
 
 // Feature flag login wall — OFF by default. Auth gate (LoginPage) hanya
 // dipasang kalau VITE_AUTH_REQUIRED === 'true' DI SAMPING isConfigured.
@@ -164,14 +165,14 @@ const DEMO_RUTE_KRL_GEOJSON = {
 const DEMO_RUTE_TRANSIT_DISCLAIMER =
   'Data contoh — belum tersambung ke tabel rute_transit_eksisting.'
 
-// Warna marker titik_kandidat di peta — dibedakan sederhana antara titik yang
-// keempat kriteria CAI-nya terisi vs lokasi USULAN BARU yang kriteria "skor
-// survei kondisi halte"-nya N/A — belum ada halte eksisting untuk dinilai,
-// jadi kriteria itu dikeluarkan & 3 bobot AHP sisanya direnormalisasi (lihat
-// isSurveyPlaceholderPoint; kepadatan/jarak/volume-nya sudah data riil).
+// Warna marker titik_kandidat = TITIK SURVEI LAPANGAN (Form Traffic Counting).
+// SATU warna sejak 2026-09-07: skema 2-warna lama membedakan "4 kriteria CAI
+// terisi" vs "skor survei N/A", tapi setelah kriteria survei dinyatakan N/A
+// untuk SELURUH titik kandidat, warna pertama tidak pernah muncul dengan data
+// riil — legenda 2 entri jadi menyesatkan. Nuansa N/A tetap dijelaskan di
+// panel rincian CAI (CaiScorePanel).
 // TODO(ui-ux-designer): ini asumsi sementara, bukan keputusan desain final.
 const CANDIDATE_MARKER_COLOR = '#2E7D5B'
-const CANDIDATE_MARKER_COLOR_PLACEHOLDER = '#B5851B'
 
 // Warna marker halte TERSURVEI — sengaja beda rumpun warna (ungu) dari
 // hijau/kuning titik_kandidat di atas supaya "halte yang sudah ada" vs
@@ -212,6 +213,16 @@ const RUTE_KRL_COLOR = '#2563EB'
 // halte BisKita tersurvei & hijau/cokelat titik kandidat.
 const STASIUN_KRL_MARKER_COLOR = '#2563EB'
 const STASIUN_LRT_MARKER_COLOR = '#0D9488'
+// Garis jalur LRT — teal sama dengan marker stasiunnya (satu moda = satu
+// keluarga warna), solid tipis: geometri rel ASLI dari OSM, bukan aproksimasi
+// seperti koridor BisKita (yang sengaja dashed).
+const RUTE_LRT_COLOR = '#0D9488'
+
+// Marker usulan halte hasil MODEL SPASIAL (tabel usulan_halte_model, migration
+// 028) — magenta, sengaja di luar seluruh rumpun warna lain supaya tidak pernah
+// tertukar dengan titik survei lapangan (hijau) maupun halte tersurvei (ungu).
+// Ini usulan turunan model, BELUM disurvei — pembedaan wajib, lihat CLAUDE.md.
+const USULAN_MODEL_MARKER_COLOR = '#DB2777'
 
 // Warna garis batas area studi (outline Kota Bekasi) — token brand-blue
 // (#1B659D, --color-brand-blue di src/index.css; sama dengan warna header &
@@ -225,18 +236,25 @@ function escapeHtml(str) {
   ))
 }
 
+// Popup titik_kandidat. PENTING (keputusan Sam 2026-09-07): titik-titik ini
+// adalah TITIK SURVEI LAPANGAN (Form Traffic Counting), bukan "usulan lokasi
+// baru" — dulu dilabeli begitu dan menyesatkan, karena beberapa di antaranya
+// justru simpul eksisting (Stasiun Bekasi, Terminal Bekasi). Yang bersifat
+// usulan adalah PROYEKSI-nya: skor CAI menjawab "seberapa layak kalau halte
+// baru ditaruh di sini". Popup menyatakan keduanya terpisah.
+// Usulan yang diturunkan MODEL ada di layer terpisah (usulan_halte_model).
 function buildCandidatePopupHtml(titik) {
   const lines = []
   if (titik?.deskripsi_lokasi) lines.push(`<strong>${escapeHtml(titik.deskripsi_lokasi)}</strong>`)
   const wilayah = [titik?.kelurahan, titik?.kecamatan].filter(Boolean).join(', ')
   if (wilayah) lines.push(escapeHtml(wilayah))
-  if (isSurveyPlaceholderPoint(titik?.id_titik_survei)) {
-    lines.push('<em>Lokasi usulan halte baru — kriteria "skor survei kondisi halte" N/A (belum ada halte eksisting)</em>')
-  }
+  lines.push('<span style="color:#64748b">Titik survei lapangan — Form Traffic Counting</span>')
   if (titik?.catatan) {
     lines.push(escapeHtml(titik.catatan))
   }
-  lines.push('<span style="color:#64748b">Klik untuk lihat rincian skor CAI</span>')
+  lines.push(
+    '<em>Klik titik ini untuk proyeksi <strong>halte baru di lokasi ini</strong>: skor CAI + rincian tiap kriteria.</em>',
+  )
   return lines.join('<br/>')
 }
 
@@ -260,6 +278,31 @@ function buildStasiunPopupHtml(props) {
   const lines = [`<strong>${escapeHtml(props?.nama || 'Stasiun')}</strong>`]
   if (props?.keterangan) lines.push(escapeHtml(props.keterangan))
   lines.push('<span style="color:#64748b">Infrastruktur eksisting — belum disurvei lapangan tim</span>')
+  return lines.join('<br/>')
+}
+
+// Popup usulan halte hasil model spasial (tabel usulan_halte_model). Angka
+// penduduk terlayani = keluaran RPC simulate_new_stop, bukan estimasi frontend.
+function buildUsulanModelPopupHtml(u) {
+  const n = (v) => (v == null ? '-' : Number(v).toLocaleString('id-ID'))
+  const lines = [
+    `<strong>Usulan #${escapeHtml(u?.ranking)} — ${escapeHtml(u?.kode)}</strong>`,
+  ]
+  const wilayah = [u?.kelurahan, u?.kecamatan].filter(Boolean).join(', ')
+  if (wilayah) lines.push(escapeHtml(wilayah))
+  lines.push(
+    `Proyeksi terlayani: <strong>${n(u?.penduduk_terlayani_400m)}</strong> jiwa (400 m) · ` +
+      `<strong>${n(u?.penduduk_terlayani_800m)}</strong> jiwa (800 m)`,
+  )
+  if (u?.skor_tdi_sel != null) {
+    lines.push(`Skor TDI sel asal: ${Number(u.skor_tdi_sel).toFixed(3)}`)
+  }
+  if (u?.jarak_halte_terdekat_m != null) {
+    lines.push(`Halte terdekat: ~${n(Math.round(u.jarak_halte_terdekat_m))} m`)
+  }
+  lines.push(
+    '<span style="color:#be185d">Usulan dari model spasial — BELUM disurvei lapangan</span>',
+  )
   return lines.join('<br/>')
 }
 
@@ -295,6 +338,18 @@ function buildKrlPopupHtml(catatan) {
 // jadi popup nama per-halte tidak dibuat — cukup satu disclaimer seragam). Redaksi
 // mengikuti properties.catatan/sumber di FeatureCollection-nya + disclaimer aproksimasi
 // yang eksplisit (bukan trayek resmi operator).
+// Popup layer garis jalur LRT. Beda tegas dari koridor BisKita OSM: geometri
+// rel LRT ADA di OSM sebagai way railway=light_rail, jadi ini bukan aproksimasi.
+const LRT_POPUP_HTML = [
+  '<strong>Jalur LRT Jabodebek</strong>',
+  `<span style="color:#64748b">Geometri rel asli OpenStreetMap (bukan aproksimasi), di-clip ke batas Kota Bekasi${
+    lrtJabodebekOsm?.properties?.panjang_km_dalam_kota
+      ? ` — ${lrtJabodebekOsm.properties.panjang_km_dalam_kota} km dalam kota`
+      : ''
+  }. Infrastruktur eksisting, belum disurvei lapangan tim.</span>`,
+  escapeHtml(lrtJabodebekOsm?.properties?.sumber || ''),
+].filter(Boolean).join('<br/>')
+
 const BISKITA_KORIDOR_OSM_POPUP_HTML = [
   '<strong>Koridor BisKita Trans Patriot (aproksimasi OSM)</strong>',
   '<span style="color:#b45309">Aproksimasi koridor dari halte OpenStreetMap + OSRM — bukan trayek resmi operator/Dishub, bukan hasil survei lapangan tim.</span>',
@@ -407,6 +462,37 @@ export default function App() {
           points.length
             ? { points, usingDemo: false }
             : { points: DEMO_HALTE_POINTS, usingDemo: true }
+        )
+      })
+  }, [])
+
+  // Usulan halte hasil MODEL SPASIAL (tabel usulan_halte_model, migration 028).
+  // Ini yang menjawab PRD Bab 1.1 "di titik mana pengembangan transit memberi
+  // dampak terbesar" dengan lokasi yang DITEMUKAN MODEL (sel transit desert
+  // TDI > 0,6, ≥400 m dari halte, de-klaster 800 m, dampak dari RPC
+  // simulate_new_stop) — bukan lokasi yang kebetulan disurvei.
+  // WAJIB dibedakan dari titik_kandidat di UI (lihat CLAUDE.md): yang ini
+  // BELUM disurvei lapangan. Tidak ada baris dummy di tabel ini, jadi tidak
+  // perlu filter sumber seperti skor_equity.
+  const [usulanModel, setUsulanModel] = useState([])
+
+  useEffect(() => {
+    if (!isConfigured) return
+    supabase
+      .from('usulan_halte_model')
+      .select(
+        'kode, geom, ranking, skor_tdi_sel, penduduk_terlayani_400m, penduduk_terlayani_800m, jarak_halte_terdekat_m, kecamatan, kelurahan',
+      )
+      .order('ranking', { ascending: true })
+      .then(({ data, error }) => {
+        if (error || !data?.length) return // biarkan kosong — layer tidak tampil
+        setUsulanModel(
+          data
+            .map((row) => {
+              const coords = extractLatLon(row.geom)
+              return coords ? { ...row, ...coords } : null
+            })
+            .filter(Boolean),
         )
       })
   }, [])
@@ -599,11 +685,12 @@ export default function App() {
       caiPoints.points.map((p) => ({
         lat: p.lat,
         lon: p.lon,
-        color: isSurveyPlaceholderPoint(p.titik?.id_titik_survei)
-          ? CANDIDATE_MARKER_COLOR_PLACEHOLDER
-          : CANDIDATE_MARKER_COLOR,
+        // SATU warna: skema 2-warna lama (final vs "skor survei N/A") jadi
+        // usang setelah kriteria survei dinyatakan N/A untuk SEMUA titik
+        // kandidat — warna "final" tidak pernah muncul dengan data riil.
+        color: CANDIDATE_MARKER_COLOR,
         popupHtml: buildCandidatePopupHtml(p.titik),
-        // Klik titik kandidat -> buka panel skor CAI (bukan popup bubble).
+        // Klik titik survei -> buka panel skor CAI (proyeksi halte baru di situ).
         onClick: () => handleMapClick({ lat: p.lat, lon: p.lon }),
       })),
     [caiPoints.points, handleMapClick],
@@ -644,11 +731,24 @@ export default function App() {
     [],
   )
 
+  // Marker usulan halte hasil model spasial — magenta, popup berisi proyeksi
+  // penduduk terlayani (keluaran simulate_new_stop) + penegasan belum disurvei.
+  const usulanModelMarkers = useMemo(
+    () =>
+      usulanModel.map((u) => ({
+        lat: u.lat,
+        lon: u.lon,
+        color: USULAN_MODEL_MARKER_COLOR,
+        popupHtml: buildUsulanModelPopupHtml(u),
+      })),
+    [usulanModel],
+  )
+
   // clickMarker TIDAK digabung di sini — dikirim sebagai prop terpisah ke
   // MapView supaya perubahannya tiap klik tidak ikut membongkar marker persisten.
   const markers = useMemo(
-    () => [...stationMarkers, ...halteMarkers, ...candidateMarkers],
-    [stationMarkers, halteMarkers, candidateMarkers],
+    () => [...stationMarkers, ...halteMarkers, ...usulanModelMarkers, ...candidateMarkers],
+    [stationMarkers, halteMarkers, usulanModelMarkers, candidateMarkers],
   )
 
   // Layer garis rute transit eksisting — 2 layer terpisah dengan visual jelas
@@ -718,6 +818,17 @@ export default function App() {
         'line-dasharray': [2, 1.2],
       },
       popupHtml: BISKITA_KORIDOR_OSM_POPUP_HTML,
+    },
+    {
+      // Jalur LRT Jabodebek — geometri rel ASLI dari OSM (bukan aproksimasi),
+      // di-clip ke batas Kota Bekasi oleh etl/build_rute_lrt_osm.py. Solid
+      // (bukan dashed seperti koridor BisKita OSM) justru untuk menandakan
+      // geometrinya presisi, bukan perkiraan.
+      id: 'rute-lrt-jabodebek',
+      type: 'line',
+      data: lrtJabodebekOsm,
+      paint: { 'line-color': RUTE_LRT_COLOR, 'line-width': 3, 'line-opacity': 0.85 },
+      popupHtml: LRT_POPUP_HTML,
     },
     ...ruteLayers,
     {
@@ -926,9 +1037,10 @@ export default function App() {
                   { color: HALTE_BISKITA_OSM_COLOR, shape: 'dot', label: 'Halte BisKita (OSM, belum disurvei)' },
                   { color: RUTE_KRL_COLOR, shape: 'line', lineStyle: 'dashed', label: 'Jaringan KRL (eksis, belum disurvei)' },
                   { color: STASIUN_KRL_MARKER_COLOR, shape: 'dot', label: 'Stasiun KRL (eksis, belum disurvei)' },
+                  { color: RUTE_LRT_COLOR, shape: 'line', lineStyle: 'solid', label: 'Jalur LRT Jabodebek (geometri OSM)' },
                   { color: STASIUN_LRT_MARKER_COLOR, shape: 'dot', label: 'Stasiun LRT Jabodebek (eksis, belum disurvei)' },
-                  { color: CANDIDATE_MARKER_COLOR, shape: 'dot', label: 'Usulan lokasi baru (4 kriteria CAI terisi)' },
-                  { color: CANDIDATE_MARKER_COLOR_PLACEHOLDER, shape: 'dot', label: 'Usulan lokasi baru (skor survei kondisi halte N/A)' },
+                  { color: CANDIDATE_MARKER_COLOR, shape: 'dot', label: 'Titik survei lapangan (Traffic Counting)' },
+                  { color: USULAN_MODEL_MARKER_COLOR, shape: 'dot', label: 'Usulan halte dari model spasial (belum disurvei)' },
                 ]}
               />
             )}
