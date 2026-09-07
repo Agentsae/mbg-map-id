@@ -1,0 +1,12 @@
+geopandas
+pyogrio   # engine geopandas untuk baca .gdb (File Geodatabase) langsung, dipakai
+          # build_admin_boundaries_from_rbi.py -- GDAL CLI (ogrinfo/ogr2ogr) tidak
+          # dibutuhkan / tidak harus ada di PATH kalau pyogrio terinstall
+shapely
+pandas
+numpy
+supabase
+python-dotenv
+openpyxl  # dipakai upload_to_supabase.load_halte_survey_excel() / load_traffic_counting_excel()
+requests  # dipakai build_rute_transit_eksisting.py untuk routing OSRM (rute BisKita
+          # mengikuti jaringan jalan, bukan garis lurus) -- lihat route_road_network()

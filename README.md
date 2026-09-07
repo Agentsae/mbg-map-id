@@ -19,30 +19,47 @@ Mengubah keputusan penempatan halte/titik transit dari berbasis intuisi menjadi 
 - **Simulasi What-If** — dampak penambahan titik layanan sebelum dibangun.
 
 ## 🧱 Stack (sesuai ketentuan kompetisi — open source)
-- **Data & Analisis Spasial:** QGIS, PostGIS, Python (GeoPandas, scikit-learn)
-- **WebGIS:** MAPID Maps / GEO MAPID (JavaScript)
-- **AI Layer:** LLM generatif sebagai penerjemah output model spasial (WLC / MCDA)
+- **Frontend:** React + Vite + MapLibre GL JS
+- **Backend/Database:** Supabase (PostgreSQL + PostGIS), Edge Functions
+- **AI Layer:** Claude API (Messages API, `claude-haiku-4-5-20251001`) dipanggil dari Supabase Edge Function (bukan dari frontend)
+- **Data & Analisis Spasial:** QGIS, Python (GeoPandas, scikit-learn, pyproj, fiona)
 - **Metodologi:** CAI (Weighted Linear Combination), TDI, Transit Equity Index, dasymetric mapping (grid 250–500 m)
 
 ## 📁 Struktur
 ```
-code/
+mbg-webgis/
 ├── README.md
 ├── requirements.txt        # dependency Python (data/AI)
 ├── .gitignore
-├── data/                   # dataset (raw di-ignore, lihat .gitignore)
-│   ├── raw/                # data mentah hasil unduh/ekspor
+├── data/
+│   ├── raw/                # data mentah hasil unduh/ekspor (di-ignore)
 │   └── processed/          # hasil olahan (grid, indeks)
-├── src/                    # script pemrosesan data & model spasial
-└── webgis/                 # integrasi MAPID Maps / frontend
+├── src/                    # React app (frontend)
+├── supabase/
+│   ├── migrations/         # skema tabel, RLS, RPC
+│   └── functions/          # Edge Functions (ai-insight, dst)
+└── webgis/                 # aset integrasi MAPID Maps tambahan
 ```
 
 ## ⚙️ Setup (lokal)
+
+Frontend:
+```bash
+npm install
+npm run dev
+```
+
+Python (data & AI):
 ```bash
 python -m venv .venv && source .venv/Scripts/activate   # Windows
 pip install -r requirements.txt
 ```
-> **Penting:** API key & konfigurasi disimpan di **backend** (jangan commit ke repo). Lihat `.gitignore`.
+
+> **Penting:** API key & konfigurasi disimpan di **backend/Edge Function**, jangan pernah pakai prefix `VITE_` untuk key rahasia (Anthropic, service role) — itu akan ter-bundel ke JS publik. Lihat `.env.example` dan `.gitignore`.
+
+### Login wall internal (opsional, default OFF)
+
+Ada gerbang login Supabase Auth (email+password, single-role Dishub/Bappeda) yang dikunci di belakang flag `VITE_AUTH_REQUIRED`. Default **OFF** — aplikasi terbuka tanpa login (dipakai untuk submission WebGIS). Set `VITE_AUTH_REQUIRED=true` di environment frontend (lokal `frontend/.env`, atau Environment Variables di dashboard Vercel) untuk menyalakannya; akun staf dibuat manual lewat Supabase Dashboard karena tidak ada signup di UI. Ini hanya proteksi level UI, bukan perubahan RLS.
 
 ## 📌 Milestone
 - Survei lapangan: 7–20 Agu 2026
@@ -56,3 +73,4 @@ pip install -r requirements.txt
 - PRD: `PRD_GeoTransitInsight-2.docx`
 - Proposal: `MBG_GeoTransitInsight-2.pdf`
 - Notulen TM I: `Notulen tech meet revisi.pdf`
+- Framework teknis: `docs/FRAMEWORK_GeoTransitInsight.md`

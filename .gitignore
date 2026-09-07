@@ -1,3 +1,6 @@
+# ===== Office lock/temp files (dibuat otomatis saat file Excel/Word dibuka) =====
+~$*
+
 # ===== Python =====
 __pycache__/
 *.py[cod]
@@ -14,15 +17,20 @@ ENV/
 # ===== Environment / Secrets (JANGAN DI-COMMIT) =====
 .env
 .env.*
+!.env.example
 *.key
 credentials.json
 NOTION_API_KEY*
+
+# ===== Supabase CLI (state lokal, bukan source code) =====
+supabase/.temp/
 
 # ===== Node / Frontend =====
 node_modules/
 npm-debug.log*
 yarn-error.log
 dist/
+.vite
 .next/
 out/
 
@@ -42,6 +50,11 @@ Desktop.ini
 data/raw/
 *.zip
 *.7z
+# Cache mentah tile Overpass (etl/fetch_osm_building_footprints.py) — JSON per-tile,
+# total bisa ratusan MB untuk seluruh Kota Bekasi, murni cache lokal supaya re-run
+# tidak query ulang tile yang sudah berhasil. Hasil akhirnya (building_footprint_bekasi.geojson)
+# sudah di-ignore lewat *.geojson di bawah.
+etl/data/osm/_building_tiles_raw/
 
 # ===== Geo / Large binaries =====
 *.shp
@@ -50,8 +63,11 @@ data/raw/
 *.prj
 *.cpg
 *.geojson
-# keep small processed exports if needed — uncomment untuk ignore semua:
-# data/processed/*.geojson
+# data olahan (kecil, sintetis) tetap di-track supaya tidak hilang dari version control
+!data/processed/*.geojson
+# aset GeoJSON kecil yang di-bundle frontend saat build (mis. batas area studi) —
+# WAJIB di-track, kalau tidak build dari clone bersih (Vercel) gagal di import
+!frontend/src/data/*.geojson
 
 # ===== Logs =====
 *.log
