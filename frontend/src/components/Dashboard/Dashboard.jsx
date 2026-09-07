@@ -7,6 +7,25 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGri
 import { supabase, isConfigured } from '../../lib/supabaseClient'
 import { fetchAllRows } from '../../lib/fetchAllRows'
 import { KOTA_PROFIL } from '../../lib/kotaProfil'
+import { extractPolygonRings, ringAveragePoint } from '../../lib/geo'
+import MiniHeatmap from './MiniHeatmap'
+
+// Ambil semua ring (exterior + hole) dari geom batas kelurahan. extractPolygonRings
+// (lib/geo.js) menangani WKB hex Polygon & GeoJSON Polygon; di sini ditambah
+// cabang GeoJSON MultiPolygon supaya kelurahan multi-bagian tetap dapat outline.
+// Return null kalau format tak dikenali -> MiniHeatmap tampil placeholder netral.
+function ringsFromGeom(geom) {
+  const poly = extractPolygonRings(geom)
+  if (poly && poly.length) return poly
+  if (
+    geom && typeof geom === 'object' && geom.type === 'MultiPolygon' &&
+    Array.isArray(geom.coordinates)
+  ) {
+    const rings = geom.coordinates.flatMap((p) => (Array.isArray(p) ? p : []))
+    return rings.length ? rings : null
+  }
+  return null
+}
 
 const fmtInt = (n) => Number(n).toLocaleString('id-ID')
 const fmtDec = (n, d = 2) =>
@@ -52,10 +71,14 @@ const DEMO_USULAN_HALTE = {
 // kolom di skema — ditampilkan sebagai "belum tersedia".
 // TODO(data-ai-analyst): kalau kolom potensi_manfaat_jiwa / estimasi_biaya
 // ditambahkan ke skor_equity atau titik_kandidat, tinggal petakan di sini.
+// `bounds: null` disengaja — pada mode demo (Supabase belum tersambung) tidak
+// ada geom batas kelurahan riil, jadi MiniHeatmap menampilkan placeholder
+// "Peta tidak tersedia", BUKAN blob karangan (CLAUDE.md: dilarang visual yang
+// seolah-olah data).
 const DEMO_REKOMENDASI_AI = [
-  { kelurahan: 'Mustika Jaya', skorDampak: 0.81, rekomendasi: 'Prioritaskan halte baru + trotoar terhubung ke permukiman padat.' },
-  { kelurahan: 'Bantar Gebang', skorDampak: 0.76, rekomendasi: 'Tambah rute feeder ke terminal terdekat, perbaiki penyeberangan.' },
-  { kelurahan: 'Rawa Lumbu', skorDampak: 0.71, rekomendasi: 'Perbaikan trotoar & penerangan jalur jalan kaki menuju halte eksisting.' },
+  { kelurahan: 'Mustika Jaya', skorDampak: 0.81, rekomendasi: 'Prioritaskan halte baru + trotoar terhubung ke permukiman padat.', bounds: null },
+  { kelurahan: 'Bantar Gebang', skorDampak: 0.76, rekomendasi: 'Tambah rute feeder ke terminal terdekat, perbaiki penyeberangan.', bounds: null },
+  { kelurahan: 'Rawa Lumbu', skorDampak: 0.71, rekomendasi: 'Perbaikan trotoar & penerangan jalur jalan kaki menuju halte eksisting.', bounds: null },
 ]
 
 // Grid dengan skor_tdi DI ATAS ambang ini dianggap "transit desert" untuk
@@ -89,6 +112,12 @@ export default function Dashboard() {
 
   const [rekomendasiAI, setRekomendasiAI] = useState(DEMO_REKOMENDASI_AI)
   const [usingDemoRekomendasi, setUsingDemoRekomendasi] = useState(!isConfigured)
+
+  // Centroid + skor_tdi SELURUH sel transit desert kota — di-fetch SEKALI
+  // (lihat grid_analisis fetchAllRows di bawah, geom ditambahkan ke select yang
+  // sudah ada) lalu dibagi ke 3 thumbnail MiniHeatmap. null = belum termuat.
+  const [gridHotPoints, setGridHotPoints] = useState(null)
+  const [gridPointsError, setGridPointsError] = useState(false)
 
   const [transitDesertCount, setTransitDesertCount] = useState(DEMO_TRANSIT_DESERT_COUNT)
   const [usingDemoDesert, setUsingDemoDesert] = useState(!isConfigured)
@@ -227,9 +256,11 @@ export default function Dashboard() {
     // Kartu "Top 3 Rekomendasi AI" — 3 kelurahan paling timpang di
     // skor_equity + rekomendasi_intervensi-nya. WAJIB filter sumber REAL%
     // (baris dummy punya ranking 1-5 sendiri — lihat EquityIndexView.jsx).
+    // `geom` ditambahkan ke select yang sudah ada (bukan query baru) untuk
+    // outline batas kelurahan di thumbnail MiniHeatmap.
     supabase
       .from('skor_equity')
-      .select('skor_final, ranking, rekomendasi_intervensi, sumber, batas_administrasi(nama_kelurahan)')
+      .select('skor_final, ranking, rekomendasi_intervensi, sumber, batas_administrasi(nama_kelurahan, geom)')
       .ilike('sumber', 'REAL%')
       .order('ranking', { ascending: true })
       .limit(3)
@@ -243,6 +274,7 @@ export default function Dashboard() {
             kelurahan: r.batas_administrasi?.nama_kelurahan || 'Kelurahan',
             skorDampak: r.skor_final != null ? Number(r.skor_final) : null,
             rekomendasi: r.rekomendasi_intervensi || null,
+            bounds: ringsFromGeom(r.batas_administrasi?.geom),
           }))
         )
         setUsingDemoRekomendasi(false)
@@ -261,16 +293,31 @@ export default function Dashboard() {
     fetchAllRows(() =>
       supabase
         .from('grid_analisis')
-        .select('id, skor_tdi')
+        .select('id, skor_tdi, geom')
         .gt('skor_tdi', TRANSIT_DESERT_THRESHOLD)
         .order('id', { ascending: true })
     ).then(({ data: rows, error }) => {
       if (error || !rows) {
         setUsingDemoDesert(true)
+        setGridPointsError(true)
         return
       }
       setTransitDesertCount(rows.length)
       setUsingDemoDesert(false)
+
+      // Reuse baris yang SAMA untuk thumbnail MiniHeatmap: centroid ring
+      // pertama (client-side, tanpa PostGIS) + skor_tdi sebagai bobot blob.
+      const pts = []
+      for (const row of rows) {
+        const ring0 = extractPolygonRings(row.geom)?.[0]
+        if (!ring0) continue
+        const c = ringAveragePoint(ring0)
+        if (c) pts.push({ lat: c.lat, lng: c.lon, tdi: Number(row.skor_tdi) })
+      }
+      setGridHotPoints(pts)
+    }).catch(() => {
+      setUsingDemoDesert(true)
+      setGridPointsError(true)
     })
 
     // Potensi penerima manfaat: RPC potensi_penerima_manfaat (migration 022).
@@ -453,6 +500,12 @@ export default function Dashboard() {
                 <p className="text-[10px] text-slate-300 mt-0.5">
                   Potensi manfaat &amp; estimasi biaya: belum tersedia di data
                 </p>
+                <MiniHeatmap
+                  name={r.kelurahan}
+                  rings={r.bounds}
+                  points={gridHotPoints}
+                  pointsError={gridPointsError}
+                />
               </li>
             ))}
           </ol>
@@ -487,14 +540,15 @@ function truncate(s, n) {
   return s.length > n ? `${s.slice(0, n - 1)}…` : s
 }
 
-// TODO(ui-ux-designer): kartu ringkasan ini masih styling generik (belum
-// disesuaikan dengan sistem kartu resmi mockup PRD Gambar 3) — asumsi wajar
-// dipakai dulu supaya data sudah tampil.
+// Kartu ringkasan — pola mockup PRD Gambar 6: ikon kecil + label + angka besar
+// scannable + unit/caption di bawah, sudut membulat, border tipis. Sudah
+// direview ui-ux-designer 2026-09-07 (branding pass); struktur data & logika
+// tidak disentuh, murni className.
 function StatCard({ icon: Icon, label, value, unit, sub, usingDemo, demoHint, hint }) {
   return (
-    <div className="bg-white border border-slate-200 rounded-lg p-3 relative">
+    <div className="bg-white border border-slate-200 rounded-lg p-3 relative hover:border-slate-300 transition-colors">
       <div className="flex items-center gap-2 text-slate-400 mb-1">
-        <Icon size={14} />
+        <Icon size={14} className="text-brand-blue/70" />
         <span
           className="text-[11px] font-medium uppercase tracking-wide"
           title={hint || undefined}

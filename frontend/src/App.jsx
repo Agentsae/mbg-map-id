@@ -9,6 +9,9 @@ import {
   FileDown,
   Settings,
   LogOut,
+  Search,
+  Bell,
+  HelpCircle,
 } from 'lucide-react'
 import MapView from './components/Map/MapView'
 import CaiScorePanel from './components/Map/CaiScorePanel'
@@ -54,7 +57,7 @@ const biskitaHalteOsm = JSON.parse(biskitaHalteOsmRaw)
 // tanpa ubah kode. Nilai selain string 'true' (termasuk unset) = OFF.
 const AUTH_REQUIRED = import.meta.env.VITE_AUTH_REQUIRED === 'true'
 
-// 8 menu sidebar sesuai wireframe resmi PRD (Gambar 3, lihat CLAUDE.md).
+// 8 menu sidebar sesuai wireframe resmi PRD (Gambar 6, Bab 10.2, lihat CLAUDE.md).
 // Seluruh 8 menu kini punya komponen nyata (ComingSoon/../ComingSoon.jsx
 // disisakan sebagai placeholder generik untuk menu masa depan kalau
 // dibutuhkan lagi, tidak dipakai aktif saat ini).
@@ -591,6 +594,7 @@ export default function App() {
   }
 
   const showPanel = activeTab !== 'peta'
+  const activeLabel = TABS.find((t) => t.id === activeTab)?.label ?? 'GeoTransit Insight'
 
   // Marker visual untuk seluruh titik_kandidat (supaya user LIHAT titik di peta
   // dulu, bukan menebak lokasi lalu klik "buta") + marker lokasi yang baru
@@ -730,47 +734,134 @@ export default function App() {
 
   return (
     <div className="h-screen w-screen flex flex-col bg-slate-50">
-      {/* Header */}
-      <header className="flex items-center gap-3 px-4 py-3 bg-brand-blue text-white shrink-0">
-        <div className="w-8 h-8 rounded-md bg-white/15 flex items-center justify-center font-bold">
-          GI
+      {/* Header — branding + poles (PRD Gambar 6). Search/Bell/Help dekoratif,
+          belum ada handler; geocoding di luar scope. */}
+      <header className="flex items-center gap-3 px-4 py-2.5 bg-brand-blue text-white shrink-0">
+        {/* Logo hanya di header saat sidebar disembunyikan (viewport sempit) —
+            di desktop logo ada di sidebar, hindari dobel. */}
+        <img
+          src="/Logo.png"
+          alt="Logo MASSTRANSIT BASED GEOINSIGHT"
+          className="w-9 h-9 rounded-full bg-white/10 shrink-0 md:hidden"
+        />
+        <div className="min-w-0">
+          <h1 className="font-semibold leading-tight truncate">{activeLabel}</h1>
+          <p className="text-xs text-white/70 leading-tight">GeoTransit Insight — Kota Bekasi</p>
         </div>
-        <div>
-          <h1 className="font-semibold leading-tight">GeoTransit Insight</h1>
-          <p className="text-xs text-white/70 leading-tight">Kota Bekasi — Tim MBG</p>
+
+        {/* Kolom pencarian — NON-FUNGSIONAL (readOnly, tanpa handler) */}
+        <div className="relative hidden sm:block flex-1 max-w-sm ml-2">
+          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/50 pointer-events-none" />
+          <input
+            type="text"
+            readOnly
+            title="Segera hadir"
+            placeholder="Cari lokasi, halte, koridor…"
+            className="w-full bg-white/10 border border-white/20 rounded-full pl-9 pr-3 py-1.5 text-sm text-white placeholder:text-white/50 focus:outline-none cursor-not-allowed"
+          />
         </div>
-        {!isConfigured && (
-          <span className="ml-auto text-xs bg-amber-400/20 text-amber-100 border border-amber-300/40 rounded-full px-3 py-1">
-            Mode demo — Supabase belum tersambung
-          </span>
-        )}
-        {isConfigured && session && (
-          <div className="ml-auto flex items-center gap-2">
-            <span className="text-xs text-white/70 truncate max-w-[160px]" title={session.user?.email}>
-              {session.user?.email}
-            </span>
-            <button
-              onClick={() => supabase.auth.signOut()}
-              title="Logout"
-              className="flex items-center gap-1 text-xs bg-white/10 hover:bg-white/20 border border-white/20 rounded-full px-3 py-1 transition"
+
+        <div className="ml-auto flex items-center gap-1.5">
+          {!isConfigured && (
+            <span
+              title="Supabase belum tersambung — menampilkan data contoh"
+              className="hidden lg:inline text-[11px] bg-amber-400/20 text-amber-100 border border-amber-300/40 rounded-full px-2.5 py-1"
             >
-              <LogOut size={12} />
-              Logout
-            </button>
-          </div>
-        )}
+              Mode demo
+            </span>
+          )}
+          {/* Dekoratif — title saja, tanpa dropdown */}
+          <button type="button" title="Notifikasi" className="p-2 rounded-full hover:bg-white/10 transition">
+            <Bell size={16} />
+          </button>
+          <button type="button" title="Bantuan" className="p-2 rounded-full hover:bg-white/10 transition">
+            <HelpCircle size={16} />
+          </button>
+
+          {isConfigured && session ? (
+            <div className="flex items-center gap-2 pl-1.5">
+              <span className="hidden sm:inline text-xs text-white/70 truncate max-w-[140px]" title={session.user?.email}>
+                {session.user?.email}
+              </span>
+              <button
+                onClick={() => supabase.auth.signOut()}
+                title="Logout"
+                className="flex items-center gap-1 text-xs bg-white/10 hover:bg-white/20 border border-white/20 rounded-full px-3 py-1 transition"
+              >
+                <LogOut size={12} />
+                Logout
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 pl-1.5" title="Dishub Kota Bekasi">
+              <span className="w-7 h-7 rounded-full bg-white/15 flex items-center justify-center text-[11px] font-semibold">
+                DB
+              </span>
+              <span className="hidden sm:inline text-xs text-white/80">Dishub Kota Bekasi</span>
+            </div>
+          )}
+        </div>
       </header>
 
       <div className="flex flex-1 min-h-0">
-        {/* Sidebar nav — 8 menu sesuai wireframe PRD (Gambar 3) */}
-        <nav className="w-16 shrink-0 bg-white border-r border-slate-200 flex flex-col items-center py-3 gap-1">
+        {/* Sidebar nav — 8 menu sesuai wireframe PRD (Gambar 6). Lebar penuh
+            dengan ikon + label di desktop; rail ikon-saja di bawahnya sebagai
+            fallback viewport sempit. */}
+        <nav className="hidden md:flex w-60 shrink-0 bg-white border-r border-slate-200 flex-col">
+          <div className="flex items-center gap-3 px-4 py-4 border-b border-slate-200">
+            <img
+              src="/Logo.png"
+              alt="Logo MASSTRANSIT BASED GEOINSIGHT"
+              className="w-11 h-11 rounded-full shrink-0"
+            />
+            <div className="min-w-0">
+              <p className="font-bold text-slate-800 leading-tight">GeoTransit Insight</p>
+              <p className="text-[10px] text-slate-400 leading-tight">
+                Spatial Decision Support System berbasis AI
+              </p>
+              <p className="text-[10px] text-slate-400 leading-tight">Kota Bekasi</p>
+            </div>
+          </div>
+
+          <div className="flex-1 overflow-y-auto py-3 px-2 space-y-0.5">
+            {TABS.map(({ id, label, icon: Icon }) => (
+              <button
+                key={id}
+                onClick={() => setActiveTab(id)}
+                className={
+                  'w-full flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition ' +
+                  (activeTab === id
+                    ? 'bg-brand-blue/10 text-brand-blue font-medium'
+                    : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700')
+                }
+              >
+                <Icon size={18} className="shrink-0" />
+                <span className="truncate">{label}</span>
+              </button>
+            ))}
+          </div>
+
+          <div className="border-t border-slate-200 px-4 py-3">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 mb-1">
+              Tentang Sistem
+            </p>
+            <p className="text-[10px] text-slate-400 leading-snug">
+              SDSS WebGIS untuk membantu Dishub &amp; Bappeda Kota Bekasi menentukan lokasi
+              prioritas infrastruktur transit massal berbasis data.
+            </p>
+            <p className="text-[10px] text-slate-300 mt-2">Versi 1.0.0</p>
+          </div>
+        </nav>
+
+        {/* Fallback rail ikon-saja untuk layar sempit (< md) */}
+        <nav className="flex md:hidden w-14 shrink-0 bg-white border-r border-slate-200 flex-col items-center py-3 gap-1">
           {TABS.map(({ id, label, icon: Icon }) => (
             <button
               key={id}
               onClick={() => setActiveTab(id)}
               title={label}
               className={
-                'w-12 h-12 rounded-lg flex flex-col items-center justify-center gap-0.5 text-[10px] transition ' +
+                'w-11 h-11 rounded-lg flex items-center justify-center transition ' +
                 (activeTab === id
                   ? 'bg-brand-blue/10 text-brand-blue'
                   : 'text-slate-400 hover:bg-slate-100 hover:text-slate-600')
