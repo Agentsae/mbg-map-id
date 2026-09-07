@@ -205,6 +205,7 @@ def recompute_all_cai_scores(
     client,
     weights: dict = None,
     kepadatan_by_titik_id: dict = None,
+    jarak_fasilitas_by_titik_id: dict = None,
     upload: bool = True,
 ) -> pd.DataFrame:
     """
@@ -222,6 +223,22 @@ def recompute_all_cai_scores(
     Default None -> perilaku lama tidak berubah (semua baris pakai placeholder).
     Lihat etl/attach_kepadatan_titik_kandidat.py untuk cara menyusun dict ini
     dari spatial join ke grid_analisis (dasymetric real).
+
+    jarak_fasilitas_by_titik_id (BARU, 7 Sep 2026): dict opsional
+    {titik_kandidat_id: jarak_ke_POI_fasilitas_umum_terdekat_m} — kalau diisi,
+    MENGGANTIKAN proxy lama `jarak_fasilitas_m <- jarak_transit_terdekat_m` per
+    baris yang id-nya ada di dict. Proxy lama itu memakai kolom Excel
+    hand-typed `jarak_transit_terdekat_m` yang semantiknya TIDAK KONSISTEN
+    antar batch survei (KND-002..009 mencatat "jarak ke transit apa saja"
+    20–350 m; KND-010..023 mencatat angka bulat 3000–8000 m) sehingga
+    n_jarak_inv terbelah ekstrem antar batch. PRD Bab 7.3 mendefinisikan
+    kriteria ini sebagai "Jarak ke fasilitas umum (inverse) — POI
+    OpenStreetMap / Menu Go, ST_Distance", jadi menghitungnya dari geom
+    membawa pipeline SESUAI spec (bukan perubahan metodologi). Titik yang
+    id-nya TIDAK ada di dict jatuh kembali ke `jarak_transit_terdekat_m`
+    (dicetak sebagai peringatan). Default None -> perilaku lama tidak berubah.
+    Lihat etl/attach_cai_features_titik_kandidat.py untuk cara menyusun dict
+    ini dari sjoin_nearest titik_kandidat -> poi (EPSG:32748).
 
     upload (BARU, 28 Agu 2026): kalau False, fungsi ini HANYA menghitung
     (compute_cai()) dan mengembalikan DataFrame, TIDAK menulis apa pun ke
@@ -313,7 +330,24 @@ def recompute_all_cai_scores(
     df = pd.DataFrame(rows).rename(columns={"id": "titik_kandidat_id"})
     # Proxy kolom mentah compute_cai() — lihat penjelasan lengkap di docstring atas.
     df["volume_penumpang"] = df["total_aktivitas"]
-    df["jarak_fasilitas_m"] = df["jarak_transit_terdekat_m"]
+
+    if jarak_fasilitas_by_titik_id is not None:
+        df["jarak_fasilitas_m"] = df["titik_kandidat_id"].map(jarak_fasilitas_by_titik_id)
+        n_missing_jarak = df["jarak_fasilitas_m"].isna().sum()
+        if n_missing_jarak:
+            missing_ids = df.loc[df["jarak_fasilitas_m"].isna(), "titik_kandidat_id"].tolist()
+            print(
+                f"[PERINGATAN] {n_missing_jarak} titik_kandidat_id tidak ada di "
+                f"jarak_fasilitas_by_titik_id -> fallback ke jarak_transit_terdekat_m "
+                f"(kolom Excel hand-typed, semantik tidak konsisten) untuk baris itu saja: {missing_ids}"
+            )
+        df["jarak_fasilitas_m"] = df["jarak_fasilitas_m"].fillna(df["jarak_transit_terdekat_m"])
+    else:
+        # PROXY LAMA: kolom Excel hand-typed jarak_transit_terdekat_m (semantik
+        # tidak konsisten antar batch survei) — dipertahankan sebagai fallback
+        # kalau pemanggil tidak mengoper jarak_fasilitas_by_titik_id.
+        df["jarak_fasilitas_m"] = df["jarak_transit_terdekat_m"]
+
     if kepadatan_by_titik_id is not None:
         df["kepadatan_penduduk"] = df["titik_kandidat_id"].map(kepadatan_by_titik_id)
         n_missing = df["kepadatan_penduduk"].isna().sum()
