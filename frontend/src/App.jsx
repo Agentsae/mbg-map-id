@@ -45,10 +45,12 @@ import bekasiBoundaryRaw from './data/bekasi_boundary.geojson?raw'
 // lebih pendek. `?raw` + JSON.parse karena Vite tidak memproses `.geojson`.
 import biskitaKoridorOsmRaw from './data/biskita_koridor_osm.geojson?raw'
 import biskitaHalteOsmRaw from './data/biskita_halte_osm.geojson?raw'
+import stasiunKotaBekasiRaw from './data/stasiun_kota_bekasi.geojson?raw'
 
 const bekasiBoundary = JSON.parse(bekasiBoundaryRaw)
 const biskitaKoridorOsm = JSON.parse(biskitaKoridorOsmRaw)
 const biskitaHalteOsm = JSON.parse(biskitaHalteOsmRaw)
+const stasiunKotaBekasi = JSON.parse(stasiunKotaBekasiRaw)
 
 // Feature flag login wall — OFF by default. Auth gate (LoginPage) hanya
 // dipasang kalau VITE_AUTH_REQUIRED === 'true' DI SAMPING isConfigured.
@@ -204,6 +206,13 @@ const HALTE_BISKITA_OSM_COLOR = '#EA580C'
 // TODO(ui-ux-designer): ini asumsi sementara, bukan keputusan desain final.
 const RUTE_KRL_COLOR = '#2563EB'
 
+// Marker stasiun kereta eksisting (layer referensi, stasiun_kota_bekasi.geojson).
+// KRL = biru (satu keluarga dengan garis RUTE_KRL_COLOR). LRT = teal, beda
+// rumpun supaya 2 moda rel langsung terbedakan; keduanya jelas beda dari ungu
+// halte BisKita tersurvei & hijau/cokelat titik kandidat.
+const STASIUN_KRL_MARKER_COLOR = '#2563EB'
+const STASIUN_LRT_MARKER_COLOR = '#0D9488'
+
 // Warna garis batas area studi (outline Kota Bekasi) — token brand-blue
 // (#1B659D, --color-brand-blue di src/index.css; sama dengan warna header &
 // marker default MapView). Garis putus-putus supaya kebaca sebagai "batas
@@ -242,6 +251,15 @@ function buildHaltePopupHtml(halte) {
   const lines = [`<strong>${escapeHtml(halte?.nama || 'Halte Tersurvei')}</strong>`]
   if (halte?.kecamatan) lines.push(escapeHtml(halte.kecamatan))
   lines.push('<span style="color:#64748b">Halte tersurvei (koridor BisKita)</span>')
+  return lines.join('<br/>')
+}
+
+// Popup marker stasiun kereta (stasiun_kota_bekasi.geojson) — per-fitur,
+// nama + moda + keterangan dari properties FeatureCollection.
+function buildStasiunPopupHtml(props) {
+  const lines = [`<strong>${escapeHtml(props?.nama || 'Stasiun')}</strong>`]
+  if (props?.keterangan) lines.push(escapeHtml(props.keterangan))
+  lines.push('<span style="color:#64748b">Infrastruktur eksisting — belum disurvei lapangan tim</span>')
   return lines.join('<br/>')
 }
 
@@ -603,11 +621,34 @@ export default function App() {
     [haltePoints.points],
   )
 
+  // Marker stasiun kereta eksisting (KRL + LRT) di Kota Bekasi — layer
+  // referensi statis (stasiun_kota_bekasi.geojson, koordinat OSM). Display-only,
+  // tidak menyentuh skoring. Klik -> popup nama + moda.
+  const stationMarkers = useMemo(
+    () =>
+      (stasiunKotaBekasi.features || [])
+        .map((f) => {
+          const [lon, lat] = f.geometry?.coordinates || []
+          if (lat == null || lon == null) return null
+          return {
+            lat,
+            lon,
+            color:
+              f.properties?.moda === 'LRT'
+                ? STASIUN_LRT_MARKER_COLOR
+                : STASIUN_KRL_MARKER_COLOR,
+            popupHtml: buildStasiunPopupHtml(f.properties),
+          }
+        })
+        .filter(Boolean),
+    [],
+  )
+
   // clickMarker TIDAK digabung di sini — dikirim sebagai prop terpisah ke
   // MapView supaya perubahannya tiap klik tidak ikut membongkar marker persisten.
   const markers = useMemo(
-    () => [...halteMarkers, ...candidateMarkers],
-    [halteMarkers, candidateMarkers],
+    () => [...stationMarkers, ...halteMarkers, ...candidateMarkers],
+    [stationMarkers, halteMarkers, candidateMarkers],
   )
 
   // Layer garis rute transit eksisting — 2 layer terpisah dengan visual jelas
@@ -884,6 +925,8 @@ export default function App() {
                   { color: RUTE_BISKITA_OSM_COLOR, shape: 'line', lineStyle: 'dashed', label: 'Koridor BisKita Trans Patriot (aproksimasi OSM)' },
                   { color: HALTE_BISKITA_OSM_COLOR, shape: 'dot', label: 'Halte BisKita (OSM, belum disurvei)' },
                   { color: RUTE_KRL_COLOR, shape: 'line', lineStyle: 'dashed', label: 'Jaringan KRL (eksis, belum disurvei)' },
+                  { color: STASIUN_KRL_MARKER_COLOR, shape: 'dot', label: 'Stasiun KRL (eksis, belum disurvei)' },
+                  { color: STASIUN_LRT_MARKER_COLOR, shape: 'dot', label: 'Stasiun LRT Jabodebek (eksis, belum disurvei)' },
                   { color: CANDIDATE_MARKER_COLOR, shape: 'dot', label: 'Usulan lokasi baru (4 kriteria CAI terisi)' },
                   { color: CANDIDATE_MARKER_COLOR_PLACEHOLDER, shape: 'dot', label: 'Usulan lokasi baru (skor survei kondisi halte N/A)' },
                 ]}
