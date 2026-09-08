@@ -9,11 +9,11 @@ import {
   FileDown,
   Settings,
   LogOut,
-  Search,
   Bell,
   HelpCircle,
 } from 'lucide-react'
 import MapView from './components/Map/MapView'
+import SearchBar from './components/Search/SearchBar'
 import CaiScorePanel from './components/Map/CaiScorePanel'
 import MapLegend from './components/Map/MapLegend'
 import AIPanel from './components/AIPanel/AIPanel'
@@ -403,6 +403,11 @@ function useAuthSession() {
 export default function App() {
   const { session, authLoading } = useAuthSession()
   const [activeTab, setActiveTab] = useState('peta')
+
+  // Instance MapLibre di-lift dari MapView (lewat onMapReady) supaya komponen
+  // di luar peta — mis. SearchBar di header — bisa memanggil flyTo/fitBounds.
+  // Null sampai event 'load' peta pertama selesai; pemakai wajib guard null.
+  const [mapInstance, setMapInstance] = useState(null)
 
   // --- Simulasi What-If ---
   const [simulationActive, setSimulationActive] = useState(false)
@@ -871,8 +876,8 @@ export default function App() {
 
   return (
     <div className="h-screen w-screen flex flex-col bg-slate-50">
-      {/* Header — branding + poles (PRD Gambar 6). Search/Bell/Help dekoratif,
-          belum ada handler; geocoding di luar scope. */}
+      {/* Header — branding + poles (PRD Gambar 6). Kolom pencarian fungsional
+          (SearchBar); Bell/Help masih dekoratif. */}
       <header className="flex items-center gap-3 px-4 py-2.5 bg-brand-blue text-white shrink-0">
         {/* Logo hanya di header saat sidebar disembunyikan (viewport sempit) —
             di desktop logo ada di sidebar, hindari dobel. */}
@@ -886,17 +891,18 @@ export default function App() {
           <p className="text-xs text-white/70 leading-tight">GeoTransit Insight — Kota Bekasi</p>
         </div>
 
-        {/* Kolom pencarian — NON-FUNGSIONAL (readOnly, tanpa handler) */}
-        <div className="relative hidden sm:block flex-1 max-w-sm ml-2">
-          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/50 pointer-events-none" />
-          <input
-            type="text"
-            readOnly
-            title="Segera hadir"
-            placeholder="Cari lokasi, halte, koridor…"
-            className="w-full bg-white/10 border border-white/20 rounded-full pl-9 pr-3 py-1.5 text-sm text-white placeholder:text-white/50 focus:outline-none cursor-not-allowed"
-          />
-        </div>
+        {/* Kolom pencarian — cari fitur peta (halte, titik survei, usulan model,
+            stasiun, koridor) yang sudah dimuat + wilayah administratif via RPC
+            search_admin_bounds. Desktop-only (hidden sm:block) seperti sebelumnya. */}
+        <SearchBar
+          className="relative hidden sm:block flex-1 max-w-sm ml-2"
+          mapInstance={mapInstance}
+          onResultSelected={() => setActiveTab('peta')}
+          halte={haltePoints.points}
+          titikKandidat={caiPoints.points}
+          usulanModel={usulanModel}
+          ruteTransit={ruteTransit}
+        />
 
         <div className="ml-auto flex items-center gap-1.5">
           {!isConfigured && (
@@ -1014,6 +1020,7 @@ export default function App() {
           <MapView
             simulationMode={simulationActive}
             onMapClick={handleMapClick}
+            onMapReady={setMapInstance}
             markers={markers}
             clickMarker={clickMarker}
             layers={mapLayers}

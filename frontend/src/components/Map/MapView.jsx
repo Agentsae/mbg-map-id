@@ -90,6 +90,8 @@ export default function MapView({
   useEffect(() => {
     onMapReadyRef.current = onMapReady
   }, [onMapReady])
+  // Penjaga supaya onMapReady dipanggil maksimal SEKALI per instance peta.
+  const mapReadyFiredRef = useRef(false)
 
   // Init peta sekali saat komponen pertama kali render
   useEffect(() => {
@@ -108,14 +110,32 @@ export default function MapView({
 
     mapRef.current.addControl(new NavigationControl(), 'top-right')
 
+    // Serahkan instance peta ke pemanggil SEGERA setelah konstruktor, JANGAN
+    // menunggu event 'load'. Alasannya (temuan QA 2026-09-08): kalau style
+    // basemap gagal render (MAPID style JSON balik 200 & ter-parse, tapi vector
+    // tile-nya tidak pernah sampai), event 'load' TIDAK PERNAH menyala →
+    // mapInstance di App.jsx tetap null → moveMap() di SearchBar diam-diam
+    // early-return dan kamera tidak pernah bergerak, tanpa error/log apa pun.
+    // Konsumen onMapReady saat ini cuma butuh objek Map-nya ada, bukan style
+    // yang selesai dimuat: SearchBar (flyTo/fitBounds — aman sebelum style
+    // load, MapLibre menyimpan target kamera) dan DataLaporan (getCanvas, baru
+    // dipanggil saat user menekan tombol export). Kalau nanti ada konsumen yang
+    // butuh addSource/addLayer, dia yang harus menunggu 'load'/isStyleLoaded()
+    // sendiri — jangan kembalikan penantian itu ke sini.
     {
       const map = mapRef.current
-      map.once('load', () => onMapReadyRef.current?.(map))
+      if (!mapReadyFiredRef.current) {
+        mapReadyFiredRef.current = true
+        onMapReadyRef.current?.(map)
+      }
     }
 
     return () => {
       mapRef.current?.remove()
       mapRef.current = null
+      // Reset supaya instance peta BARU (mis. remount / StrictMode double-mount
+      // di dev) tetap diserahkan lagi ke pemanggil.
+      mapReadyFiredRef.current = false
     }
   }, [])
 
