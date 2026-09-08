@@ -249,8 +249,9 @@ export default function MapView({
   }, [clickMarker])
 
   // Sinkronisasi layer GeoJSON generik (mis. grid kepadatan, jaringan transit,
-  // indeks gap aksesibilitas untuk Analisis Spasial). addSource/addLayer harus
-  // menunggu style selesai load, jadi pakai isStyleLoaded() + fallback event 'load'.
+  // indeks gap aksesibilitas untuk Analisis Spasial, sorotan wilayah hasil
+  // pencarian). addSource/addLayer baru boleh dipanggil setelah style selesai
+  // di-PARSE — lihat catatan kesiapan style di bawah.
   useEffect(() => {
     const map = mapRef.current
     if (!map) return
@@ -283,10 +284,42 @@ export default function MapView({
       layerIdsRef.current = layers.map((l) => l.id)
     }
 
-    if (map.isStyleLoaded()) {
-      applyLayers()
-    } else {
-      map.once('load', applyLayers)
+    // KENAPA TIDAK CUKUP `if (map.isStyleLoaded()) ... else map.once('load')`
+    // (bentuk lama, diganti 2026-09-08): isStyleLoaded() JUGA bernilai false
+    // selama tile sumber masih dimuat — mis. TEPAT setelah fitBounds dari hasil
+    // pencarian — padahal MapLibre sebenarnya sudah menerima addSource/addLayer
+    // begitu style selesai di-parse. Karena event 'load' hanya menyala SEKALI
+    // seumur instance peta, setiap pembaruan layer yang kebetulan datang saat
+    // kamera sedang bergerak akan menunggu event yang tidak akan pernah datang
+    // lagi, alias HILANG diam-diam (ditemukan saat menambah layer sorotan
+    // wilayah: state React sudah terisi, legenda sudah muncul, tapi layernya
+    // tidak pernah masuk ke peta).
+    // Sekarang: coba terapkan langsung; hanya kalau MapLibre benar-benar
+    // menolak karena style belum siap, baru menunggu event berikutnya —
+    // 'load' untuk kondisi awal, 'idle' untuk kondisi sesudahnya.
+    const coba = () => {
+      try {
+        applyLayers()
+        return true
+      } catch (err) {
+        // Satu-satunya kegagalan yang WAJAR di sini: style belum selesai
+        // di-parse (akan dicoba lagi lewat listener di bawah). Kegagalan lain
+        // dimunculkan supaya tidak hilang tanpa jejak.
+        if (!/style is not done loading/i.test(String(err?.message))) {
+          console.warn('[GeoTransit Insight] gagal menyinkronkan layer peta:', err)
+        }
+        return false
+      }
+    }
+
+    if (coba()) return
+
+    const onStyleSiap = () => coba()
+    map.once('load', onStyleSiap)
+    map.once('idle', onStyleSiap)
+    return () => {
+      map.off('load', onStyleSiap)
+      map.off('idle', onStyleSiap)
     }
   }, [layers])
 

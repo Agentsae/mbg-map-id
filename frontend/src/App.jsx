@@ -230,6 +230,18 @@ const USULAN_MODEL_MARKER_COLOR = '#DB2777'
 // wilayah", bukan rute/jaringan.
 const BATAS_KOTA_COLOR = '#1B659D'
 
+// Warna sorotan batas wilayah TERPILIH dari hasil pencarian (kelurahan/kecamatan
+// via RPC get_admin_geometry). Sengaja dibedakan tegas dari BATAS_KOTA_COLOR:
+// batas kota = biru brand + PUTUS-PUTUS ("area studi", konteks permanen);
+// wilayah terpilih = emas + SOLID tebal + isian tipis ("area yang barusan kamu
+// pilih", sementara). Beda bentuk garis + adanya isian bidang membuat keduanya
+// terbedakan TANPA bergantung warna sama sekali (syarat colorblind-safe
+// CLAUDE.md Bab 10.3) — dan emas adalah satu-satunya rumpun warna yang belum
+// dipakai legenda (hijau/ungu/oranye/biru/teal/magenta sudah terpakai).
+// Tidak memakai pasangan merah–hijau sama sekali.
+// TODO(ui-ux-designer): emas ini asumsi webgis-developer, bukan keputusan desain final.
+const SOROT_WILAYAH_COLOR = '#CA8A04'
+
 function escapeHtml(str) {
   return String(str ?? '').replace(/[&<>"']/g, (c) => (
     { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
@@ -408,6 +420,12 @@ export default function App() {
   // di luar peta — mis. SearchBar di header — bisa memanggil flyTo/fitBounds.
   // Null sampai event 'load' peta pertama selesai; pemakai wajib guard null.
   const [mapInstance, setMapInstance] = useState(null)
+
+  // Batas wilayah yang sedang disorot karena dipilih dari hasil pencarian:
+  // { level: 'kelurahan'|'kecamatan', nama, geojson } atau null. Diisi SearchBar
+  // (lazy, via RPC get_admin_geometry saat baris Wilayah dipilih) dan
+  // dikosongkan saat hasil titik/garis dipilih atau input dibersihkan.
+  const [sorotWilayah, setSorotWilayah] = useState(null)
 
   // --- Simulasi What-If ---
   const [simulationActive, setSimulationActive] = useState(false)
@@ -810,6 +828,35 @@ export default function App() {
     return { ...biskitaHalteOsm, features }
   }, [haltePoints.points])
 
+  // get_admin_geometry mengembalikan GEOMETRY TELANJANG (Polygon/MultiPolygon),
+  // bukan Feature/FeatureCollection — source GeoJSON MapLibre butuh yang
+  // terakhir, jadi dibungkus di sini. Cabang JSON.parse untuk jaga-jaga kalau
+  // kolom json datang sebagai string; kalau bentuknya tidak dikenali, hasilnya
+  // null (tidak ada layer sorotan) — bukan crash.
+  const sorotWilayahGeoJSON = useMemo(() => {
+    const mentah = sorotWilayah?.geojson
+    if (!mentah) return null
+    let geometry = mentah
+    if (typeof mentah === 'string') {
+      try {
+        geometry = JSON.parse(mentah)
+      } catch {
+        return null
+      }
+    }
+    if (!geometry?.type || !geometry?.coordinates) return null
+    return {
+      type: 'FeatureCollection',
+      features: [
+        {
+          type: 'Feature',
+          properties: { nama: sorotWilayah.nama, level: sorotWilayah.level },
+          geometry,
+        },
+      ],
+    }
+  }, [sorotWilayah])
+
   // Semua display-only, selalu tampil (konteks dasar), tidak perlu toggle.
   const mapLayers = [
     {
@@ -855,6 +902,32 @@ export default function App() {
       data: bekasiBoundary,
       paint: { 'line-color': BATAS_KOTA_COLOR, 'line-width': 2.5, 'line-dasharray': [3, 2] },
     },
+    // Sorotan wilayah terpilih dari pencarian — DITARUH PALING AKHIR supaya
+    // digambar di atas semua layer lain (elemen belakang array = paling atas).
+    // Isian sengaja sangat tipis (opacity 0,12): fungsinya menegaskan BIDANG
+    // wilayahnya, bukan mewarnai; grid/marker/rute di bawahnya tetap terbaca.
+    // Garis tepi 3px SOLID = elemen yang benar-benar dilihat user, sekaligus
+    // pembeda bentuk terhadap batas kota yang putus-putus.
+    ...(sorotWilayahGeoJSON
+      ? [
+          {
+            id: 'sorot-wilayah-fill',
+            type: 'fill',
+            data: sorotWilayahGeoJSON,
+            paint: { 'fill-color': SOROT_WILAYAH_COLOR, 'fill-opacity': 0.12 },
+          },
+          {
+            id: 'sorot-wilayah-garis',
+            type: 'line',
+            data: sorotWilayahGeoJSON,
+            paint: {
+              'line-color': SOROT_WILAYAH_COLOR,
+              'line-width': 3,
+              'line-opacity': 0.95,
+            },
+          },
+        ]
+      : []),
   ]
 
   // Auth gate: kalau login wall dinyalakan (AUTH_REQUIRED) DAN Supabase
@@ -893,11 +966,14 @@ export default function App() {
 
         {/* Kolom pencarian — cari fitur peta (halte, titik survei, usulan model,
             stasiun, koridor) yang sudah dimuat + wilayah administratif via RPC
-            search_admin_bounds. Desktop-only (hidden sm:block) seperti sebelumnya. */}
+            search_admin_bounds. Memilih hasil Wilayah juga menyorot batas
+            administrasinya di peta (get_admin_geometry, lihat sorotWilayah).
+            Desktop-only (hidden sm:block) seperti sebelumnya. */}
         <SearchBar
           className="relative hidden sm:block flex-1 max-w-sm ml-2"
           mapInstance={mapInstance}
           onResultSelected={() => setActiveTab('peta')}
+          onWilayahSelected={setSorotWilayah}
           halte={haltePoints.points}
           titikKandidat={caiPoints.points}
           usulanModel={usulanModel}
@@ -1037,6 +1113,19 @@ export default function App() {
             {activeTab === 'peta' && (
               <MapLegend
                 items={[
+                  // Entri sorotan hanya muncul saat ada wilayah terpilih —
+                  // legenda permanen untuk sesuatu yang biasanya tidak ada di
+                  // peta justru membingungkan. Ditaruh paling atas + menyebut
+                  // nama wilayahnya supaya jelas ini status sementara, bukan
+                  // layer tetap seperti entri di bawahnya.
+                  ...(sorotWilayah
+                    ? [{
+                        color: SOROT_WILAYAH_COLOR,
+                        shape: 'line',
+                        lineStyle: 'solid',
+                        label: `Wilayah terpilih (hasil pencarian): ${sorotWilayah.nama}`,
+                      }]
+                    : []),
                   { color: BATAS_KOTA_COLOR, shape: 'line', lineStyle: 'dashed', label: 'Batas Kota Bekasi (area studi)' },
                   { color: HALTE_TERSURVEI_MARKER_COLOR, shape: 'dot', label: 'Halte tersurvei' },
                   { color: RUTE_BISKITA_COLOR, shape: 'line', lineStyle: 'solid', label: 'Koridor BisKita (tersurvei, garis aproksimasi)' },

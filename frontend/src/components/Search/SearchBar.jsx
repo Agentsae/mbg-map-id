@@ -107,6 +107,12 @@ function mergeLineItems(fc, fallbackLabel, sublabel, prefix) {
  *    memilih), bukan gagal diam-diam.
  *  - onResultSelected?: () => void — dipanggil saat sebuah hasil dipilih;
  *    App.jsx memakainya untuk pindah ke tab 'peta'.
+ *  - onWilayahSelected?: (sorot: {level, nama, geojson} | null) => void — dipanggil
+ *    saat hasil dipilih ATAU input dibersihkan. Berisi geometri batas wilayah
+ *    (dari RPC `get_admin_geometry`) kalau yang dipilih hasil Wilayah, dan `null`
+ *    untuk semua kasus lain (hasil titik/garis, input dibersihkan, RPC gagal /
+ *    belum ter-deploy / mode demo). App.jsx memakainya untuk menggambar layer
+ *    sorotan batas wilayah di peta.
  *  - halte: Array<{lat, lon, nama, kecamatan?, kelurahan?}> — haltePoints.points.
  *  - titikKandidat: Array<{lat, lon, titik:{id_titik_survei, deskripsi_lokasi, ...}}> — caiPoints.points.
  *  - usulanModel: Array<{lat, lon, kode, ranking, kecamatan?, kelurahan?}> — usulanModel.
@@ -116,6 +122,7 @@ export default function SearchBar({
   className = '',
   mapInstance = null,
   onResultSelected,
+  onWilayahSelected,
   halte = [],
   titikKandidat = [],
   usulanModel = [],
@@ -133,6 +140,10 @@ export default function SearchBar({
 
   const inputRef = useRef(null)
   const listRef = useRef(null)
+  // Penanda urutan permintaan get_admin_geometry — respons yang datang
+  // terlambat (pilihan sudah berganti) dibuang, supaya sorotan tidak "mundur"
+  // ke wilayah yang dipilih sebelumnya.
+  const sorotReqRef = useRef(0)
 
   // --- Debounce input ---
   useEffect(() => {
@@ -175,6 +186,11 @@ export default function SearchBar({
             id: `wilayah-${row.level}-${i}`,
             group: 'Wilayah',
             kind: 'bbox',
+            // level + nama dibawa apa adanya (ejaan asli dari tabel, lihat
+            // migration 031) — dipakai sebagai argumen RPC get_admin_geometry
+            // saat baris ini dipilih, supaya batas wilayahnya ikut digambar.
+            level: row.level,
+            nama: row.nama,
             label: row.nama,
             sublabel:
               row.level === 'kelurahan'
@@ -350,6 +366,50 @@ export default function SearchBar({
     return true
   }
 
+  // Membatalkan sorotan wilayah yang sedang tampil (dan menganulir respons RPC
+  // yang mungkin masih dalam perjalanan) — dipakai saat hasil non-wilayah
+  // dipilih, input dibersihkan (× / Esc), atau RPC gagal.
+  function bersihkanSorot() {
+    sorotReqRef.current += 1
+    onWilayahSelected?.(null)
+  }
+
+  // Ambil geometri batas wilayah terpilih. LAZY: hanya dipanggil saat sebuah
+  // baris Wilayah BENAR-BENAR dipilih, bukan saat mengetik atau per baris hasil
+  // (geometri poligon jauh lebih berat dari bbox — jangan ikut di jalur ketik).
+  // Kamera TIDAK menunggu ini: fitBounds sudah jalan dari bbox baris pencarian,
+  // jadi kalau RPC lambat/gagal/belum ter-deploy petanya tetap berpindah, cuma
+  // tanpa sorotan. Gagal = diam di UI, tapi jujur (tidak ada sorotan basi yang
+  // tertinggal dari pilihan sebelumnya).
+  async function ambilSorotWilayah(item) {
+    const req = (sorotReqRef.current += 1)
+    if (!isConfigured) {
+      onWilayahSelected?.(null)
+      return
+    }
+    try {
+      const { data, error } = await supabase.rpc('get_admin_geometry', {
+        p_level: item.level,
+        p_nama: item.nama,
+      })
+      // Pilihan sudah tergeser ke hasil lain — buang respons basi supaya tidak
+      // menimpa sorotan yang lebih baru.
+      if (req !== sorotReqRef.current) return
+      const row = Array.isArray(data) ? data[0] : data
+      if (error || !row?.geojson) {
+        onWilayahSelected?.(null)
+        return
+      }
+      onWilayahSelected?.({
+        level: row.level || item.level,
+        nama: row.nama || item.nama,
+        geojson: row.geojson,
+      })
+    } catch {
+      if (req === sorotReqRef.current) onWilayahSelected?.(null)
+    }
+  }
+
   function handleSelect(item) {
     if (!item) return
     // Pindah tab tetap dilakukan lebih dulu (UX yang dimaksud: hasil pencarian
@@ -359,6 +419,11 @@ export default function SearchBar({
     onResultSelected?.()
     const moved = moveMap(item)
     setMapNotReady(!moved)
+    // Sorotan batas wilayah: hanya untuk hasil Wilayah (kind 'bbox'). Hasil
+    // titik/garis WAJIB membersihkan sorotan sebelumnya supaya tidak ada area
+    // tersorot yang tidak nyambung dengan apa yang barusan dipilih.
+    if (item.kind === 'bbox' && item.level && item.nama) ambilSorotWilayah(item)
+    else bersihkanSorot()
     setQuery(item.label)
     setOpen(false)
     setActiveIndex(-1)
@@ -369,6 +434,7 @@ export default function SearchBar({
     if (e.key === 'Escape') {
       setOpen(false)
       setQuery('')
+      bersihkanSorot()
       inputRef.current?.blur()
       return
     }
@@ -420,6 +486,7 @@ export default function SearchBar({
             onClick={() => {
               setQuery('')
               setOpen(false)
+              bersihkanSorot()
               inputRef.current?.focus()
             }}
             className="absolute right-2.5 top-1/2 -translate-y-1/2 text-white/60 hover:text-white"
