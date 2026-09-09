@@ -295,8 +295,20 @@ export default function MapView({
     // wilayah: state React sudah terisi, legenda sudah muncul, tapi layernya
     // tidak pernah masuk ke peta).
     // Sekarang: coba terapkan langsung; hanya kalau MapLibre benar-benar
-    // menolak karena style belum siap, baru menunggu event berikutnya —
-    // 'load' untuk kondisi awal, 'idle' untuk kondisi sesudahnya.
+    // menolak karena style belum siap, baru menunggu event berikutnya.
+    // KENAPA 'styledata' dan BUKAN 'idle' (revisi 2026-09-09): bentuk
+    // sebelumnya menunggu `map.once('idle', ...)`. Dengan basemap MAPID,
+    // vector tile-nya kadang stall/retry terus sehingga peta TIDAK PERNAH
+    // mencapai 'idle' — akibatnya coba() tak pernah dijalankan ulang dan
+    // layer 'sorot-wilayah-*' (dipasang saat user memilih kelurahan/
+    // kecamatan dari search) diam-diam tidak pernah muncul, sementara
+    // kamera tetap bergerak (fitBounds jalan dari bbox secara terpisah) —
+    // terlihat seolah "sudah pan ke area tapi tanpa outline". 'styledata'
+    // menyala BERULANG di tiap progres data style (style lambat selesai
+    // di-parse, source dimuat), jadi coba() akan terus mencoba sampai
+    // style bisa menerima addLayer. coba()/applyLayers() idempoten (tiap
+    // addSource/addLayer dijaga getSource/getLayer), aman dipanggil ulang.
+    // 'load' tetap dipasang sekali sebagai jaring pengaman paint pertama.
     const coba = () => {
       try {
         applyLayers()
@@ -315,11 +327,11 @@ export default function MapView({
     if (coba()) return
 
     const onStyleSiap = () => coba()
+    map.on('styledata', onStyleSiap)
     map.once('load', onStyleSiap)
-    map.once('idle', onStyleSiap)
     return () => {
+      map.off('styledata', onStyleSiap)
       map.off('load', onStyleSiap)
-      map.off('idle', onStyleSiap)
     }
   }, [layers])
 
