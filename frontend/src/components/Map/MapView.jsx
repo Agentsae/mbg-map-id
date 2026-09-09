@@ -1,6 +1,20 @@
 import { useEffect, useRef } from 'react'
-import { Map as MapLibreMap, NavigationControl, Marker, Popup } from 'maplibre-gl'
+import { Map as MapLibreMap, NavigationControl, Marker, Popup, setWorkerUrl } from 'maplibre-gl'
+// maplibre-gl@6 me-resolve tile Web Worker-nya lewat ekspresi DINAMIS di
+// runtime (`new URL(`./${t}`, import.meta.url)` dengan `t`/`e` sebagai
+// variabel), bukan pola literal `new URL('./x.mjs', import.meta.url)`.
+// Vite/Rollup tidak bisa mendeteksi itu secara statis, jadi `vite build`
+// TIDAK pernah meng-emit `maplibre-gl-worker.mjs` -> di produksi worker
+// 404 -> tile .pbf tidak pernah di-fetch/parse -> basemap tidak pernah
+// tampil (marker/kontrol tetap muncul karena di main thread). Solusi:
+// impor worker via `?worker&url` supaya Vite MEM-BUNDLE-nya (inline chunk
+// `maplibre-gl-shared.mjs` ~470 KB yang di-import worker) dan meng-emit
+// satu URL aset ber-hash, lalu serahkan URL itu ke maplibre lewat
+// setWorkerUrl() di scope modul (sekali, sebelum Map mana pun dibangun).
+import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
 import 'maplibre-gl/dist/maplibre-gl.css'
+
+setWorkerUrl(maplibreWorkerUrl)
 
 // Pusat peta: Kota Bekasi (perkiraan dari titik Summarecon Bekasi di proposal)
 const BEKASI_CENTER = [107.0074, -6.2185]
