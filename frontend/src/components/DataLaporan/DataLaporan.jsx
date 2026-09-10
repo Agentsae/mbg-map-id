@@ -89,6 +89,10 @@ export default function DataLaporan() {
    */
   function handleMapReady(m) {
     mapObjRef.current = m
+    // Peta ini di panel <aside> dalam scroll-container: kalau kontainer sempat
+    // 0 tinggi saat init, kanvas 0x0 dan 'idle' tak pernah datang. resize()
+    // sekali setelah layout stabil memaksa realokasi ke ukuran benar.
+    requestAnimationFrame(() => { try { m.resize() } catch { /* noop */ } })
     let settled = false
     const markPainted = () => {
       if (settled) return
@@ -328,13 +332,21 @@ export default function DataLaporan() {
       }
     }
 
-    // 1) Render paksa SINKRON, lalu tunggu dua rAF supaya minimal satu frame
-    //    benar-benar di-commit ke drawing buffer sebelum dibaca.
+    // 1) Selaraskan ukuran kanvas dengan kontainer dulu. Peta ini hidup di
+    //    panel <aside> dalam scroll-container; kalau kontainer sempat 0 tinggi
+    //    saat MapLibre init, kanvas ter-alokasi 0x0 dan tidak pernah ter-cat —
+    //    map.resize() memaksa realokasi ke ukuran benar. Lalu render paksa
+    //    SINKRON (map.redraw() maplibre-gl v6) + 2x rAF supaya minimal satu
+    //    frame benar-benar di-commit ke drawing buffer sebelum dibaca.
     try {
+      if (typeof map.resize === 'function') map.resize()
       if (typeof map.redraw === 'function') map.redraw()
       else if (typeof map.triggerRepaint === 'function') map.triggerRepaint()
     } catch { /* noop */ }
     await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
+    // resize bisa memicu fetch tile baru; beri satu frame lagi + redraw kedua.
+    try { if (typeof map.redraw === 'function') map.redraw() } catch { /* noop */ }
+    await new Promise((r) => requestAnimationFrame(r))
 
     // 2) Baca canvas
     let mapCanvas
