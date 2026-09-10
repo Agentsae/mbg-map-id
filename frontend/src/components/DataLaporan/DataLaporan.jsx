@@ -1,10 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { FileDown, FileImage, FileText, Loader2 } from 'lucide-react'
 import { jsPDF } from 'jspdf'
-import MapView from '../Map/MapView'
 import { supabase, isConfigured } from '../../lib/supabaseClient'
 import { KOTA_PROFIL } from '../../lib/kotaProfil'
-import { extractLatLon } from '../../lib/geo'
 
 /**
  * DataLaporan — tab "Data & Laporan" (PRD Bab 8 "Export Report" + User Flow
@@ -18,7 +16,16 @@ import { extractLatLon } from '../../lib/geo'
  * html2canvas 1.4.1 dan bikin ekspor gagal). Sebagai gantinya:
  *   - PNG: digambar manual ke <canvas> 2D (teks + drawImage kanvas peta).
  *   - PDF: jsPDF langsung (doc.text + doc.addImage kanvas peta).
- * Kanvas peta bisa dibaca ulang karena MapView kini pakai preserveDrawingBuffer.
+ *
+ * Kanvas peta yang direkam = peta UTAMA (MapView di <main> App.jsx), dioper
+ * lewat prop `mapInstance`. Sebelumnya komponen ini men-spawn MapView kedua di
+ * panel 208 px; peta kecil itu sering ter-init 0x0 di dalam scroll-container
+ * dan TIDAK PERNAH menggambar tile -> export selalu tanpa peta (deteksi blank
+ * -> note). Peta utama selalu ter-render (view yang sedang dilihat user),
+ * `preserveDrawingBuffer: true` di MapView bikin kanvasnya bisa dibaca ulang.
+ * Konsekuensi: laporan merekam tampilan "Peta Interaktif" saat itu (zoom/layer
+ * yang sedang aktif) — sesuai "tampilan peta" di PRD Bab 8.
+ *
  * Semua angka murni membaca hasil yang sudah dihitung di Supabase — tidak ada
  * formula CAI/TDI/Equity dihitung ulang di sini.
  */
@@ -63,61 +70,49 @@ const DEMO_MODEL = {
   equityDemo: true,
 }
 
-export default function DataLaporan() {
+export default function DataLaporan({ mapInstance = null }) {
   const [model, setModel] = useState(DEMO_MODEL)
   const [loadingModel, setLoadingModel] = useState(isConfigured)
   const [exporting, setExporting] = useState(null) // 'png' | 'pdf' | null
   const [note, setNote] = useState(null)
-  // mapPainted = peta laporan sudah benar-benar menggambar tile (bukan sekadar
+  // mapPainted = peta UTAMA sudah benar-benar menggambar tile (bukan sekadar
   // "instance peta ada"). Tombol unduh baru aktif setelah ini true, supaya klik
   // langsung menghasilkan file DENGAN peta — tanpa penantian panjang saat klik.
   const [mapPainted, setMapPainted] = useState(false)
   // paintTimedOut = safety timeout tercapai sebelum 'idle' (tile vektor MAPID
   // streaming terus). Tombol tetap dibuka, hanya diberi hint kecil.
   const [paintTimedOut, setPaintTimedOut] = useState(false)
-  const mapObjRef = useRef(null)
-  const paintTimerRef = useRef(null)
 
-  // Bersihkan safety timeout kalau komponen keburu unmount.
-  useEffect(() => () => { if (paintTimerRef.current) clearTimeout(paintTimerRef.current) }, [])
-
-  /**
-   * handleMapReady — dipanggil MapView SEGERA setelah konstruktor peta (belum
-   * tentu sudah menggambar). Kita simpan instance-nya untuk captureMap(), lalu
-   * MULAI menunggu 'idle' di sini (saat mount, BUKAN saat klik unduh). Begitu
-   * peta ter-cat, buka tombol unduh; captureMap() sesudahnya cukup redraw + rAF.
-   */
-  function handleMapReady(m) {
-    mapObjRef.current = m
-    // Peta ini di panel <aside> dalam scroll-container: kalau kontainer sempat
-    // 0 tinggi saat init, kanvas 0x0 dan 'idle' tak pernah datang. resize()
-    // sekali setelah layout stabil memaksa realokasi ke ukuran benar.
-    requestAnimationFrame(() => { try { m.resize() } catch { /* noop */ } })
+  // Tunggu peta UTAMA (prop mapInstance, di-lift dari MapView <main> App.jsx)
+  // benar-benar ter-cat. Dilakukan saat tab dibuka, BUKAN saat klik unduh —
+  // jadi captureMap() nanti cukup redraw + rAF. Peta utama praktis selalu sudah
+  // ter-render (user baru saja melihatnya di tab lain), tapi guard 'idle'/'load'
+  // + timeout 12 dtk tetap dipasang untuk kasus MAPID lambat.
+  useEffect(() => {
+    const m = mapInstance
+    if (!m) return
     let settled = false
-    const markPainted = () => {
+    const mark = () => {
       if (settled) return
       settled = true
-      if (paintTimerRef.current) { clearTimeout(paintTimerRef.current); paintTimerRef.current = null }
-      try { m.off('idle', markPainted); m.off('load', markPainted) } catch { /* noop */ }
+      clearTimeout(t)
+      try { m.off('idle', mark); m.off('load', mark) } catch { /* noop */ }
       setMapPainted(true)
     }
-
     const styleReady = typeof m.isStyleLoaded !== 'function' || m.isStyleLoaded()
     const fullyLoaded = typeof m.loaded !== 'function' || m.loaded()
     if (styleReady && fullyLoaded) {
-      // Sudah selesai render — beri 2 rAF supaya frame pertama benar-benar tercat.
-      requestAnimationFrame(() => requestAnimationFrame(markPainted))
+      requestAnimationFrame(() => requestAnimationFrame(mark))
     } else {
-      m.once('idle', markPainted)
-      m.on('load', markPainted)
+      m.once('idle', mark)
+      m.on('load', mark)
     }
-
-    // Safety: jangan kunci tombol selamanya kalau 'idle' tak pernah datang.
-    paintTimerRef.current = setTimeout(() => {
-      setPaintTimedOut(true)
-      markPainted()
-    }, 12000)
-  }
+    const t = setTimeout(() => { setPaintTimedOut(true); mark() }, 12000)
+    return () => {
+      clearTimeout(t)
+      try { m.off('idle', mark); m.off('load', mark) } catch { /* noop */ }
+    }
+  }, [mapInstance])
 
   useEffect(() => {
     if (!isConfigured) return
@@ -234,46 +229,6 @@ export default function DataLaporan() {
     return () => { cancelled = true }
   }, [])
 
-  // Layer peta untuk laporan: titik halte eksisting (jaringan transit) supaya
-  // peta tidak kosong. Ringan — 15 titik. Fallback: tanpa layer (basemap saja).
-  const [halteLayer, setHalteLayer] = useState({ type: 'FeatureCollection', features: [] })
-  useEffect(() => {
-    if (!isConfigured) return
-    supabase
-      .from('halte_eksisting')
-      .select('id, nama, geom')
-      .limit(500)
-      .then(({ data, error }) => {
-        if (error || !data?.length) return
-        const features = data
-          .map((row) => {
-            const c = extractLatLon(row.geom)
-            return c
-              ? { type: 'Feature', geometry: { type: 'Point', coordinates: [c.lon, c.lat] }, properties: {} }
-              : null
-          })
-          .filter(Boolean)
-        setHalteLayer({ type: 'FeatureCollection', features })
-      })
-  }, [])
-
-  const reportLayers = useMemo(
-    () => [
-      {
-        id: 'laporan-halte',
-        type: 'circle',
-        data: halteLayer,
-        paint: {
-          'circle-radius': 5,
-          'circle-color': '#7C3AED',
-          'circle-stroke-width': 1.5,
-          'circle-stroke-color': '#ffffff',
-        },
-      },
-    ],
-    [halteLayer]
-  )
-
   const nowLabel = () => new Date().toLocaleString('id-ID', { dateStyle: 'long', timeStyle: 'short' })
 
   function buildLines() {
@@ -323,28 +278,24 @@ export default function DataLaporan() {
    * tile MAPID masih streaming).
    */
   async function captureMap() {
-    const map = mapObjRef.current
+    const map = mapInstance
     if (!map) {
       return {
         canvas: null,
         dataUrl: null,
-        note: 'Peta belum siap — buka tab ini dan tunggu peta tampil sebelum mengunduh.',
+        note: 'Peta belum siap. Buka tab "Peta Interaktif" sebentar supaya peta termuat, lalu kembali ke sini.',
       }
     }
 
-    // 1) Selaraskan ukuran kanvas dengan kontainer dulu. Peta ini hidup di
-    //    panel <aside> dalam scroll-container; kalau kontainer sempat 0 tinggi
-    //    saat MapLibre init, kanvas ter-alokasi 0x0 dan tidak pernah ter-cat —
-    //    map.resize() memaksa realokasi ke ukuran benar. Lalu render paksa
-    //    SINKRON (map.redraw() maplibre-gl v6) + 2x rAF supaya minimal satu
-    //    frame benar-benar di-commit ke drawing buffer sebelum dibaca.
+    // Render paksa SINKRON (map.redraw() maplibre-gl v6) + 2x rAF supaya minimal
+    // satu frame benar-benar di-commit ke drawing buffer sebelum dibaca. resize()
+    // dulu sebagai jaga-jaga kalau ukuran kanvas belum sinkron dengan kontainer.
     try {
       if (typeof map.resize === 'function') map.resize()
       if (typeof map.redraw === 'function') map.redraw()
       else if (typeof map.triggerRepaint === 'function') map.triggerRepaint()
     } catch { /* noop */ }
     await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
-    // resize bisa memicu fetch tile baru; beri satu frame lagi + redraw kedua.
     try { if (typeof map.redraw === 'function') map.redraw() } catch { /* noop */ }
     await new Promise((r) => requestAnimationFrame(r))
 
@@ -651,8 +602,9 @@ export default function DataLaporan() {
           Prioritas top 5, dan ranking Transit Equity Index teratas.
         </p>
 
-        <div className="rounded-lg overflow-hidden border border-slate-200 h-52">
-          <MapView layers={reportLayers} onMapReady={handleMapReady} />
+        <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
+          Laporan merekam <span className="font-medium text-slate-600">tampilan peta &quot;Peta Interaktif&quot; saat ini</span>
+          {' '}(zoom &amp; layer yang sedang aktif). Atur dulu di tab itu bila perlu, lalu kembali ke sini untuk mengunduh.
         </div>
 
         <div className="rounded-lg border border-slate-200 p-3 space-y-1.5 text-xs">
