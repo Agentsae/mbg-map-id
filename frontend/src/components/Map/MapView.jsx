@@ -1,5 +1,15 @@
-import { useEffect, useRef } from 'react'
-import { Map as MapLibreMap, NavigationControl, Marker, Popup, setWorkerUrl } from 'maplibre-gl'
+import { useEffect, useRef, useState } from 'react'
+import { Crosshair } from 'lucide-react'
+import {
+  Map as MapLibreMap,
+  NavigationControl,
+  GeolocateControl,
+  FullscreenControl,
+  ScaleControl,
+  Marker,
+  Popup,
+  setWorkerUrl,
+} from 'maplibre-gl'
 // maplibre-gl@6 me-resolve tile Web Worker-nya lewat ekspresi DINAMIS di
 // runtime (`new URL(`./${t}`, import.meta.url)` dengan `t`/`e` sebagai
 // variabel), bukan pola literal `new URL('./x.mjs', import.meta.url)`.
@@ -57,6 +67,52 @@ if (!(MAPID_STYLE_BASE && MAPID_API_KEY)) {
 }
 
 /**
+ * Kontrol kustom "kembali ke tampilan awal" — di-render sebagai tombol di
+ * dalam grup kontrol MapLibre (top-right) supaya visualnya menyatu dengan
+ * tombol zoom/kompas, bukan overlay React terpisah. flyTo mereset juga
+ * bearing & pitch supaya kamera benar-benar pulang ke keadaan awal.
+ */
+class ResetViewControl {
+  constructor({ center, zoom }) {
+    this._center = center
+    this._zoom = zoom
+  }
+
+  onAdd(map) {
+    this._map = map
+    this._container = document.createElement('div')
+    this._container.className = 'maplibregl-ctrl maplibregl-ctrl-group'
+
+    const btn = document.createElement('button')
+    btn.type = 'button'
+    btn.className = 'gti-ctrl-reset'
+    btn.title = 'Kembali ke tampilan Kota Bekasi'
+    btn.setAttribute('aria-label', 'Kembali ke tampilan Kota Bekasi')
+    btn.innerHTML =
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+      'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      '<path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M9.5 21v-6h5v6"/></svg>'
+    btn.addEventListener('click', () => {
+      map.flyTo({
+        center: this._center,
+        zoom: this._zoom,
+        bearing: 0,
+        pitch: 0,
+        duration: 700,
+      })
+    })
+
+    this._container.appendChild(btn)
+    return this._container
+  }
+
+  onRemove() {
+    this._container?.parentNode?.removeChild(this._container)
+    this._map = undefined
+  }
+}
+
+/**
  * MapView — komponen peta inti GeoTransit Insight.
  *
  * Props:
@@ -94,7 +150,12 @@ export default function MapView({
   children,
 }) {
   const containerRef = useRef(null)
+  const wrapperRef = useRef(null)
   const mapRef = useRef(null)
+  // Overlay "memuat peta" ditutup begitu style/tile pertama render — atau
+  // paling lambat setelah fallback timeout (basemap MAPID kadang tidak
+  // pernah mencapai 'idle', lihat catatan sinkronisasi layer di bawah).
+  const [mapLoaded, setMapLoaded] = useState(false)
   const markerRefs = useRef([])
   const clickMarkerRef = useRef(null)
   const layerIdsRef = useRef([])
@@ -122,7 +183,35 @@ export default function MapView({
       preserveDrawingBuffer: true,
     })
 
-    mapRef.current.addControl(new NavigationControl(), 'top-right')
+    const map = mapRef.current
+    // Cluster kontrol top-right: zoom + kompas, "kembali ke Kota Bekasi",
+    // geolokasi, dan fullscreen. Fullscreen menyasar wrapper (bukan canvas)
+    // supaya overlay CaiScorePanel/MapLegend ikut tampil saat layar penuh.
+    map.addControl(new NavigationControl({ visualizePitch: true }), 'top-right')
+    map.addControl(new ResetViewControl({ center: BEKASI_CENTER, zoom: BEKASI_ZOOM }), 'top-right')
+    map.addControl(
+      new GeolocateControl({
+        positionOptions: { enableHighAccuracy: true },
+        trackUserLocation: true,
+        showUserLocation: true,
+      }),
+      'top-right',
+    )
+    if (wrapperRef.current) {
+      map.addControl(new FullscreenControl({ container: wrapperRef.current }), 'top-right')
+    }
+    map.addControl(new ScaleControl({ maxWidth: 120, unit: 'metric' }), 'bottom-left')
+
+    // Tutup overlay "memuat peta" pada sinyal paling awal yang tersedia:
+    // event 'load' (style + tile pertama), 'idle' (render selesai), atau
+    // fallback timeout kalau MAPID tak pernah menyentuh keduanya.
+    let cancelled = false
+    const markLoaded = () => {
+      if (!cancelled) setMapLoaded(true)
+    }
+    map.on('load', markLoaded)
+    map.once('idle', markLoaded)
+    const loadFallback = setTimeout(markLoaded, 4500)
 
     // Serahkan instance peta ke pemanggil SEGERA setelah konstruktor, JANGAN
     // menunggu event 'load'. Alasannya (temuan QA 2026-09-08): kalau style
@@ -136,15 +225,20 @@ export default function MapView({
     // dipanggil saat user menekan tombol export). Kalau nanti ada konsumen yang
     // butuh addSource/addLayer, dia yang harus menunggu 'load'/isStyleLoaded()
     // sendiri — jangan kembalikan penantian itu ke sini.
-    {
-      const map = mapRef.current
-      if (!mapReadyFiredRef.current) {
-        mapReadyFiredRef.current = true
-        onMapReadyRef.current?.(map)
-      }
+    if (!mapReadyFiredRef.current) {
+      mapReadyFiredRef.current = true
+      onMapReadyRef.current?.(map)
     }
 
+    // Hook debug/QA (DEV-only, di-tree-shake dari build produksi): ekspos
+    // instance peta ke global supaya harness browser bisa memeriksa
+    // getStyle().layers / isSourceLoaded tanpa jalur khusus. Bukan API produk.
+    if (import.meta.env.DEV && typeof window !== 'undefined') window.__gtiMap = map
+
     return () => {
+      cancelled = true
+      clearTimeout(loadFallback)
+      map.off('load', markLoaded)
       mapRef.current?.remove()
       mapRef.current = null
       // Reset supaya instance peta BARU (mis. remount / StrictMode double-mount
@@ -206,12 +300,41 @@ export default function MapView({
   // muncul saat diklik.
   const createMarker = (map, m) => {
     const el = document.createElement('div')
-    el.style.width = '14px'
-    el.style.height = '14px'
-    el.style.borderRadius = '50%'
-    el.style.border = '2px solid white'
-    el.style.boxShadow = '0 1px 3px rgba(0,0,0,0.4)'
-    el.style.background = m.color || '#1B659D'
+    const color = m.color || '#1B659D'
+    if (m.icon) {
+      // Badge ikon ~24px: latar putih, tepi 2px warna marker, glyph SVG di
+      // tengah mewarisi warna lewat currentColor (el.style.color). Dipakai untuk
+      // halte/stasiun/usulan supaya moda transit terbedakan lewat BENTUK ikon,
+      // bukan warna saja (syarat colorblind-safe CLAUDE.md Bab 10.3). Tepi
+      // 'dashed' (m.iconStyle) menandai layer yang BELUM riil/tersurvei
+      // (usulan halte model).
+      el.style.width = '24px'
+      el.style.height = '24px'
+      el.style.display = 'flex'
+      el.style.alignItems = 'center'
+      el.style.justifyContent = 'center'
+      el.style.borderRadius = '7px'
+      el.style.background = '#ffffff'
+      el.style.border = `2px ${m.iconStyle === 'dashed' ? 'dashed' : 'solid'} ${color}`
+      el.style.boxShadow = '0 1px 3px rgba(0,0,0,0.35)'
+      el.style.color = color
+      el.innerHTML = m.icon
+    } else {
+      el.style.width = '14px'
+      el.style.height = '14px'
+      el.style.borderRadius = '50%'
+      el.style.border = '2px solid white'
+      el.style.boxShadow = '0 1px 3px rgba(0,0,0,0.4)'
+      el.style.background = color
+    }
+    if (m.title) el.title = m.title
+    // Marker transient (lokasi yang baru diklik) memakai cincin denyut —
+    // ::after di .gti-marker-pulse mengambil warna dari `color` di bawah.
+    if (m.pulse) {
+      el.classList.add('gti-marker-pulse')
+      el.style.position = 'relative'
+      el.style.color = color
+    }
 
     const marker = new Marker({ element: el }).setLngLat([m.lon, m.lat])
     const hasPopup = !!(m.popupHtml || m.popupText)
@@ -350,13 +473,28 @@ export default function MapView({
   }, [layers])
 
   return (
-    <div className="relative w-full h-full">
+    <div ref={wrapperRef} className="relative w-full h-full bg-slate-100">
       <div ref={containerRef} className="w-full h-full" />
+
+      {!mapLoaded && (
+        <div className="absolute inset-0 z-30 flex items-center justify-center bg-slate-50">
+          <div className="flex flex-col items-center gap-3 text-slate-400">
+            <span
+              className="h-8 w-8 animate-spin rounded-full border-2 border-slate-200"
+              style={{ borderTopColor: '#1B659D' }}
+            />
+            <p className="text-xs font-medium">Memuat peta Kota Bekasi…</p>
+          </div>
+        </div>
+      )}
+
       {simulationMode && (
-        <div className="absolute top-3 left-1/2 -translate-x-1/2 bg-brand-orange text-white text-sm font-medium px-4 py-2 rounded-full shadow-lg">
+        <div className="absolute top-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-2 rounded-full bg-brand-orange/95 px-4 py-2 text-sm font-medium text-white shadow-lg backdrop-blur-sm">
+          <Crosshair size={15} className="shrink-0" />
           Mode Simulasi aktif — klik di peta untuk menguji lokasi halte baru
         </div>
       )}
+
       {children}
     </div>
   )

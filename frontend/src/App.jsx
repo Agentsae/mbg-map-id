@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   LayoutDashboard,
   Map as MapIcon,
@@ -16,6 +16,7 @@ import MapView from './components/Map/MapView'
 import SearchBar from './components/Search/SearchBar'
 import CaiScorePanel from './components/Map/CaiScorePanel'
 import MapLegend from './components/Map/MapLegend'
+import LayerControl from './components/Map/LayerControl'
 import AIPanel from './components/AIPanel/AIPanel'
 import AnalisisSpasial from './components/AnalisisSpasial/AnalisisSpasial'
 import SimulationPanel from './components/SimulationMode/SimulationPanel'
@@ -25,8 +26,20 @@ import DataLaporan from './components/DataLaporan/DataLaporan'
 import LoginPage from './components/Auth/LoginPage'
 import Pengaturan from './components/Pengaturan/Pengaturan'
 import { supabase, isConfigured } from './lib/supabaseClient'
-import { extractLatLon, extractLineStringCoords, findNearestPoint, haversineMeters } from './lib/geo'
+import { extractLatLon, extractLineStringCoords, extractPolygonRings, haversineMeters } from './lib/geo'
 import { isDummyHalte } from './lib/halteEksisting'
+import { fetchAllRows } from './lib/fetchAllRows'
+import {
+  CHOROPLETH_COLORS,
+  CLASS_COUNT,
+  computeMinMax,
+  fmtBound,
+  quantileBreaks,
+  stepFillColorExpr,
+  toCentroidPointFC,
+  toPolygonFeatureCollection,
+} from './lib/choropleth'
+import { markerIconSvg, legendIconSvg } from './lib/mapIcons'
 
 // Batas area studi (outline Kota Bekasi) — aset STATIS yang di-bundle saat
 // build, hasil etl/build_bekasi_boundary_geojson.py (dissolve 56 kelurahan
@@ -117,6 +130,106 @@ const DEMO_CAI_POINTS = [
   },
 ]
 
+// Data contoh rincian CAI — dipakai kalau Supabase belum tersambung, meniru
+// JSON keluaran RPC get_cai_breakdown (migration 033) APA ADANYA. CAI kini
+// SURFACE grid 300 m (grid_analisis), bukan lagi 19 titik_kandidat diskret —
+// jadi bentuk ini per-sel, bukan per-titik. TIDAK ada formula dihitung di sini:
+// `kontribusi` sudah = nilai x bobot, murni angka contoh statis.
+//   * DEMO_CAI_BREAKDOWN         -> kasus mayoritas sel: 2 kriteria aktif
+//     (kepadatan + jarak), bobot efektif 0,5 / 0,5 (rasio AHP kepadatan=jarak).
+//   * DEMO_CAI_BREAKDOWN_VOLUME  -> sel dekat titik cacah lapangan: 3 kriteria
+//     (kepadatan + jarak + volume), bobot efektif 0,3834 / 0,3834 / 0,2331.
+// handleMapClick memilih salah satunya berdasar titik DEMO_CAI_POINTS terdekat
+// (hanya untuk variasi tampilan — jarak tidak lagi jadi gerbang apa pun).
+const DEMO_CAI_BREAKDOWN = {
+  ditemukan: true,
+  cell_id: 1487,
+  match: 'memuat',
+  jarak_ke_sel_m: 0,
+  skor_cai: 0.5316,
+  skor_cai_reproduksi: 0.5316,
+  formula:
+    'cai_skor = Σ( nilai_ternormalisasi_i × bobot_efektif_i ) untuk kriteria AKTIF di sel; ' +
+    'tiap nilai dinormalisasi min-max 0–1; bobot dari AHP pairwise Saaty (konfigurasi_bobot ' +
+    "nama_index='CAI'), subset kriteria aktif direnormalisasi ke jumlah 1. Model ADITIF (WLC), " +
+    'bukan rasio seperti TDI.',
+  volume_estimasi: false,
+  komponen: [
+    {
+      kunci: 'kepadatan',
+      label: 'Kepadatan penduduk',
+      nilai: 0.618,
+      bobot: 0.5,
+      kontribusi: 0.309,
+      nilai_mentah: 7284.15,
+      satuan: 'jiwa per sel (~300 × 300 m, dasymetric mapping)',
+      arah: 'Makin padat → skor CAI naik (prioritas naik)',
+    },
+    {
+      kunci: 'jarak_fasilitas_inv',
+      label: 'Jarak ke fasilitas umum (inverse)',
+      nilai: 0.4452,
+      bobot: 0.5,
+      kontribusi: 0.2226,
+      nilai_mentah: 612.4,
+      satuan: 'meter ke POI fasilitas umum terdekat (sekolah/faskes/kerja, OSM; dibatasi 3000 m)',
+      arah: 'Makin dekat → skor CAI naik',
+    },
+  ],
+  catatan:
+    'Data contoh — surface CAI grid 300 m HYBRID: kepadatan (dasymetric) & jarak POI (OSM) ' +
+    'diturunkan dari geodata di setiap sel. Kriteria volume transit N/A untuk sel ini (tidak ada ' +
+    'titik cacah lapangan ≤ 300 m); kriteria survei kondisi halte N/A (tidak ada halte tersurvei ' +
+    '≤ 400 m). Bobot 2 kriteria sisanya (kepadatan, jarak) direnormalisasi ke jumlah 1.',
+}
+
+const DEMO_CAI_BREAKDOWN_VOLUME = {
+  ditemukan: true,
+  cell_id: 803,
+  match: 'terdekat',
+  jarak_ke_sel_m: 128,
+  skor_cai: 0.632,
+  skor_cai_reproduksi: 0.632,
+  formula: DEMO_CAI_BREAKDOWN.formula,
+  volume_estimasi: false,
+  komponen: [
+    {
+      kunci: 'kepadatan',
+      label: 'Kepadatan penduduk',
+      nilai: 0.701,
+      bobot: 0.3834,
+      kontribusi: 0.2688,
+      nilai_mentah: 9105.6,
+      satuan: 'jiwa per sel (~300 × 300 m, dasymetric mapping)',
+      arah: 'Makin padat → skor CAI naik (prioritas naik)',
+    },
+    {
+      kunci: 'jarak_fasilitas_inv',
+      label: 'Jarak ke fasilitas umum (inverse)',
+      nilai: 0.523,
+      bobot: 0.3834,
+      kontribusi: 0.2005,
+      nilai_mentah: 445,
+      satuan: 'meter ke POI fasilitas umum terdekat (sekolah/faskes/kerja, OSM; dibatasi 3000 m)',
+      arah: 'Makin dekat → skor CAI naik',
+    },
+    {
+      kunci: 'volume',
+      label: 'Volume penumpang / aktivitas transit',
+      nilai: 0.698,
+      bobot: 0.2331,
+      kontribusi: 0.1627,
+      nilai_mentah: 412,
+      satuan: 'aktivitas / 2 jam (traffic counting lapangan, titik survei ≤ 300 m)',
+      arah: 'Makin tinggi → skor CAI naik',
+    },
+  ],
+  catatan:
+    'Data contoh — surface CAI grid 300 m HYBRID: sel ini ≤ 300 m dari titik cacah lapangan, jadi ' +
+    'kriteria volume transit AKTIF (traffic counting riil). Kriteria survei kondisi halte N/A ' +
+    '(tidak ada halte tersurvei ≤ 400 m); bobot 3 kriteria sisanya direnormalisasi ke jumlah 1.',
+}
+
 // Data contoh halte_eksisting — dipakai kalau Supabase belum tersambung/tabel
 // masih kosong, supaya layer "jaringan transit eksisting" (acceptance criteria
 // Peta Multi-Layer Gap Analysis, CLAUDE.md) tetap tampil. Koordinat & nama
@@ -164,6 +277,43 @@ const DEMO_RUTE_KRL_GEOJSON = {
 }
 const DEMO_RUTE_TRANSIT_DISCLAIMER =
   'Data contoh — belum tersambung ke tabel rute_transit_eksisting.'
+
+// Grid contoh untuk OVERLAI ANALITIK (choropleth kepadatan / TDI) saat Supabase
+// belum tersambung. 36 sel kotak membagi bbox kasar Kota Bekasi — BUKAN grid
+// 300 m riil grid_analisis, hanya supaya overlai tetap bisa didemokan. Nilai
+// deterministik (bukan Math.random) supaya stabil antar reload.
+const DEMO_CHORO_BBOX = { minLat: -6.35, maxLat: -6.15, minLon: 106.95, maxLon: 107.12 }
+function buildDemoChoroCells() {
+  const n = 6
+  const lonStep = (DEMO_CHORO_BBOX.maxLon - DEMO_CHORO_BBOX.minLon) / n
+  const latStep = (DEMO_CHORO_BBOX.maxLat - DEMO_CHORO_BBOX.minLat) / n
+  const cells = []
+  for (let r = 0; r < n; r++) {
+    for (let c = 0; c < n; c++) {
+      const seed = r * n + c + 1
+      const rnd = (k) => {
+        const x = Math.sin(seed * k) * 43758.5453
+        return x - Math.floor(x)
+      }
+      const minLon = DEMO_CHORO_BBOX.minLon + c * lonStep
+      const minLat = DEMO_CHORO_BBOX.minLat + r * latStep
+      const maxLon = minLon + lonStep
+      const maxLat = minLat + latStep
+      cells.push({
+        ring: [
+          [minLon, minLat],
+          [maxLon, minLat],
+          [maxLon, maxLat],
+          [minLon, maxLat],
+          [minLon, minLat],
+        ],
+        kepadatan: Math.round(rnd(12.9898) * 16000 + 1500),
+        tdi: Number(rnd(3.7).toFixed(2)),
+      })
+    }
+  }
+  return cells
+}
 
 // Warna marker titik_kandidat = TITIK SURVEI LAPANGAN (Form Traffic Counting).
 // SATU warna sejak 2026-09-07: skema 2-warna lama membedakan "4 kriteria CAI
@@ -427,6 +577,68 @@ export default function App() {
   // dikosongkan saat hasil titik/garis dipilih atau input dibersihkan.
   const [sorotWilayah, setSorotWilayah] = useState(null)
 
+  // --- Panel Layer (tab Peta Interaktif) ---
+  // Visibilitas layer titik/garis konteks — semua default ON. Key dipetakan ke
+  // marker group / layer garis di mapLayers di bawah. candidateMarkers (titik
+  // survei, jangkar CAI) sengaja TIDAK di daftar ini — selalu tampil.
+  const [layerVis, setLayerVis] = useState({
+    usulanModel: true,
+    halte: true,
+    stasiun: true,
+    koridorBiskita: true,
+    krl: true,
+    lrt: true,
+    batasKota: true,
+  })
+  // Overlai analitik choropleth full-map: 'none' | 'kepadatan' | 'tdi'.
+  const [analyticOverlay, setAnalyticOverlay] = useState('none')
+  // Cache sel grid_analisis untuk overlai — di-fetch LAZY (sekali, saat overlai
+  // pertama kali dinyalakan) lalu ditahan; toggle off/on tidak fetch ulang.
+  // Bentuk: array { ring:[[lon,lat]...], kepadatan:number, tdi:number } | null.
+  const [gridChoro, setGridChoro] = useState(null)
+  const [gridChoroLoading, setGridChoroLoading] = useState(false)
+  // Penjaga supaya fetch grid_analisis untuk overlai HANYA jalan sekali —
+  // toggle overlai off lalu on lagi tidak memicu fetch ulang.
+  const gridChoroFetchStartedRef = useRef(false)
+
+  useEffect(() => {
+    if (analyticOverlay === 'none' || gridChoroFetchStartedRef.current) return
+    gridChoroFetchStartedRef.current = true
+    let cancelled = false
+
+    ;(async () => {
+      setGridChoroLoading(true)
+      try {
+        if (!isConfigured) {
+          if (!cancelled) setGridChoro(buildDemoChoroCells())
+          return
+        }
+        // 2.607 baris grid_analisis > cap 1000/req PostgREST -> fetchAllRows.
+        const { data, error } = await fetchAllRows(() =>
+          supabase.from('grid_analisis').select('id, geom, kepadatan_penduduk, skor_tdi'),
+        )
+        if (error) throw error
+        const cells = (data ?? [])
+          .map((row) => {
+            const ring0 = extractPolygonRings(row.geom)?.[0]
+            if (!ring0) return null
+            return { ring: ring0, kepadatan: row.kepadatan_penduduk, tdi: row.skor_tdi }
+          })
+          .filter(Boolean)
+        if (!cancelled) setGridChoro(cells.length ? cells : buildDemoChoroCells())
+      } catch (err) {
+        console.error('Gagal memuat grid_analisis untuk overlai analitik:', err)
+        if (!cancelled) setGridChoro(buildDemoChoroCells())
+      } finally {
+        if (!cancelled) setGridChoroLoading(false)
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [analyticOverlay])
+
   // --- Simulasi What-If ---
   const [simulationActive, setSimulationActive] = useState(false)
   const [simLoading, setSimLoading] = useState(false)
@@ -635,7 +847,7 @@ export default function App() {
     if (focusTab) setActiveTab('simulasi')
     setSimLoading(true)
     setCaiResult(null)
-    setClickMarker({ lat, lon, color: '#E08A1E', popupText })
+    setClickMarker({ lat, lon, color: '#E08A1E', popupText, pulse: true })
 
     try {
       if (isConfigured) {
@@ -663,23 +875,49 @@ export default function App() {
       return
     }
 
-    // --- Alur skor CAI (klik lokasi -> cari titik_kandidat terdekat) ---
+    // --- Alur skor CAI (klik lokasi -> RPC get_cai_breakdown, surface grid 300 m) ---
+    // Sejak CAI pindah dari 19 titik_kandidat diskret ke SURFACE grid 300 m
+    // (grid_analisis, migration 033), skor CAI tersedia untuk SEMBARANG
+    // koordinat di area berpenduduk Kota Bekasi — bukan lagi lookup tetangga
+    // terdekat + ambang jarak. RPC HANYA menyajikan kolom cai_* yang sudah
+    // dihitung offline (etl/compute_cai_grid.py); frontend tidak menghitung
+    // ulang formula CAI. setCaiResult diisi JSON RPC apa adanya (CaiScorePanel
+    // yang mem-parse bentuk ditemukan:true / ditemukan:false).
     setCaiLoading(true)
     setSimResult(null)
     // Slate netral — marker transient "titik yang baru diklik", sengaja bukan
     // warna layer data mana pun. Marker simulasi sudah oranye.
-    setClickMarker({ lat, lon, color: '#334155', popupText: 'Lokasi dicek' })
+    setClickMarker({ lat, lon, color: '#334155', popupText: 'Lokasi dicek', pulse: true })
 
-    const nearest = findNearestPoint(caiPoints.points, { lat, lon })
-
-    setCaiUsingDemo(caiPoints.usingDemo)
-    setCaiResult(
-      nearest
-        ? { skor: nearest.point.skor, titik: nearest.point.titik, distance_m: nearest.distance_m }
-        : { skor: null }
-    )
+    if (isConfigured) {
+      setCaiUsingDemo(false)
+      try {
+        const { data, error } = await supabase.rpc('get_cai_breakdown', { lng: lon, lat })
+        if (error) throw error
+        setCaiResult(data)
+      } catch (err) {
+        console.error('Gagal memanggil get_cai_breakdown:', err)
+        setCaiResult({ ditemukan: false, pesan: 'Gagal memuat skor CAI.' })
+      }
+    } else {
+      // Mode demo: pilih ragam breakdown menurut titik DEMO_CAI_POINTS terdekat
+      // (jaraknya TIDAK lagi jadi gerbang apa pun — cuma untuk memvariasikan
+      // tampilan antara kasus 2-kriteria dan 3-kriteria + volume).
+      setCaiUsingDemo(true)
+      let terdekat = null
+      let jarakMin = Infinity
+      for (const p of DEMO_CAI_POINTS) {
+        const d = haversineMeters(p, { lat, lon })
+        if (d < jarakMin) {
+          jarakMin = d
+          terdekat = p
+        }
+      }
+      const pakaiVolume = (terdekat?.skor?.n_volume ?? 0) >= 0.5
+      setCaiResult(pakaiVolume ? DEMO_CAI_BREAKDOWN_VOLUME : DEMO_CAI_BREAKDOWN)
+    }
     setCaiLoading(false)
-  }, [simulationActive, caiPoints, runSimulationAt])
+  }, [simulationActive, runSimulationAt])
 
   function handleToggleSimulation() {
     setSimulationActive((v) => !v)
@@ -696,10 +934,11 @@ export default function App() {
   const activeLabel = TABS.find((t) => t.id === activeTab)?.label ?? 'GeoTransit Insight'
 
   // Marker visual untuk seluruh titik_kandidat (supaya user LIHAT titik di peta
-  // dulu, bukan menebak lokasi lalu klik "buta") + marker lokasi yang baru
-  // diklik bebas (kalau ada). Klik langsung pada marker titik kandidat memanggil
-  // handleMapClick di koordinat titik itu sendiri (nearest-search akan
-  // menemukan dirinya sendiri, distance ~0m).
+  // dulu, bukan menebak lokasi lalu klik "buta"). Ke-19 marker ini tetap
+  // menandai titik survei lapangan. Klik langsung pada marker memanggil
+  // handleMapClick di koordinat titik itu sendiri — yang kini mengenai RPC
+  // get_cai_breakdown pada sel grid 300 m yang memuat titik tsb (sel itu punya
+  // volume terukur, jadi breakdown 3-4 kriteria).
   // Di-useMemo supaya identitas array marker STABIL antar-render (kalau tidak,
   // MapView membongkar-pasang seluruh marker + popup terbuka tiap kali App
   // re-render — mis. saat fetch data selesai / panel skor dibuka).
@@ -726,6 +965,7 @@ export default function App() {
         lat: h.lat,
         lon: h.lon,
         color: HALTE_TERSURVEI_MARKER_COLOR,
+        icon: markerIconSvg('bus'),
         popupHtml: buildHaltePopupHtml(h),
       })),
     [haltePoints.points],
@@ -740,13 +980,14 @@ export default function App() {
         .map((f) => {
           const [lon, lat] = f.geometry?.coordinates || []
           if (lat == null || lon == null) return null
+          const isLrt = f.properties?.moda === 'LRT'
           return {
             lat,
             lon,
-            color:
-              f.properties?.moda === 'LRT'
-                ? STASIUN_LRT_MARKER_COLOR
-                : STASIUN_KRL_MARKER_COLOR,
+            color: isLrt ? STASIUN_LRT_MARKER_COLOR : STASIUN_KRL_MARKER_COLOR,
+            // Glyph beda per moda: trem (LRT) vs kereta (KRL) — pembeda BENTUK
+            // di samping warna (colorblind-safe, CLAUDE.md Bab 10.3).
+            icon: markerIconSvg(isLrt ? 'tram' : 'train'),
             popupHtml: buildStasiunPopupHtml(f.properties),
           }
         })
@@ -762,6 +1003,10 @@ export default function App() {
         lat: u.lat,
         lon: u.lon,
         color: USULAN_MODEL_MARKER_COLOR,
+        // Pin + tepi PUTUS-PUTUS: usulan model, BELUM disurvei lapangan —
+        // sengaja tampil "belum riil" vs badge solid halte tersurvei.
+        icon: markerIconSvg('pin'),
+        iconStyle: 'dashed',
         popupHtml: buildUsulanModelPopupHtml(u),
       })),
     [usulanModel],
@@ -769,10 +1014,24 @@ export default function App() {
 
   // clickMarker TIDAK digabung di sini — dikirim sebagai prop terpisah ke
   // MapView supaya perubahannya tiap klik tidak ikut membongkar marker persisten.
-  const markers = useMemo(
-    () => [...stationMarkers, ...halteMarkers, ...usulanModelMarkers, ...candidateMarkers],
-    [stationMarkers, halteMarkers, usulanModelMarkers, candidateMarkers],
-  )
+  // Grup marker disaring oleh panel Layer (layerVis). candidateMarkers (titik
+  // survei, jangkar CAI) SELALU ikut — tidak ada di daftar toggle.
+  const markers = useMemo(() => {
+    const out = []
+    if (layerVis.stasiun) out.push(...stationMarkers)
+    if (layerVis.halte) out.push(...halteMarkers)
+    if (layerVis.usulanModel) out.push(...usulanModelMarkers)
+    out.push(...candidateMarkers)
+    return out
+  }, [
+    stationMarkers,
+    halteMarkers,
+    usulanModelMarkers,
+    candidateMarkers,
+    layerVis.stasiun,
+    layerVis.halte,
+    layerVis.usulanModel,
+  ])
 
   // Layer garis rute transit eksisting — 2 layer terpisah dengan visual jelas
   // berbeda (lihat konstanta warna RUTE_BISKITA_COLOR/RUTE_KRL_COLOR di atas).
@@ -788,6 +1047,7 @@ export default function App() {
       data: ruteTransit.biskitaGeoJSON,
       paint: { 'line-color': RUTE_BISKITA_COLOR, 'line-width': 5, 'line-opacity': 0.9 },
       popupHtml: ruteTransit.biskitaPopupHtml,
+      visible: layerVis.koridorBiskita,
     },
     {
       id: 'rute-krl-eksisting',
@@ -800,6 +1060,7 @@ export default function App() {
         'line-dasharray': [2, 1.5],
       },
       popupHtml: ruteTransit.krlPopupHtml,
+      visible: layerVis.krl,
     },
   ]
 
@@ -857,8 +1118,129 @@ export default function App() {
     }
   }, [sorotWilayah])
 
-  // Semua display-only, selalu tampil (konteks dasar), tidak perlu toggle.
+  // Overlai analitik full-map dari grid 300 m (grid_analisis), dinyalakan dari
+  // panel Layer. Data grid mentah di-cache di `gridChoro` (lazy fetch). Tidak
+  // ada skor dihitung ulang di sini; hanya klasifikasi/visualisasi tampilan.
+  //   * 'kepadatan' -> CHOROPLETH fill poligon sel, kelas KUANTIL (tiap kelas
+  //     ≈ jumlah sel setara — equal-interval linear membuat peta nyaris polos
+  //     karena mayoritas sel numpuk di kelas terendah). Palet YlGnBu.
+  //   * 'tdi' -> HEATMAP dari titik pusat sel, ramp Viridis (CLAUDE.md Bab 10.3
+  //     menyebut Viridis/ColorBrewer eksplisit). Permukaan interpolasi, bukan
+  //     batas sel.
+  const choroActive = analyticOverlay !== 'none'
+  const choroDerived = useMemo(() => {
+    if (!gridChoro?.length) return null
+    if (analyticOverlay === 'tdi') {
+      return { kind: 'heatmap', fc: toCentroidPointFC(gridChoro, 'tdi') }
+    }
+    const values = gridChoro.map((c) => c.kepadatan)
+    const range = computeMinMax(values)
+    const breaks = quantileBreaks(values, CLASS_COUNT)
+    const fc = toPolygonFeatureCollection(gridChoro, (c) => c.kepadatan)
+    return { kind: 'choropleth', range, breaks, fc }
+  }, [gridChoro, analyticOverlay])
+
+  // Grup legenda untuk overlai aktif — note (cara baca) + baris item.
+  // choropleth: 5 baris `swatch` (Kelas N · a – b, format angka Indonesia).
+  // heatmap: 1 baris `gradient` ramp Viridis berlabel "TDI rendah/tinggi".
+  const VIRIDIS_LEGEND_GRADIENT =
+    'linear-gradient(90deg, #440154, #3b528b, #21908d, #5dc963, #fde725)'
+  const choroLegendGroup = useMemo(() => {
+    if (!choroActive || !choroDerived) return null
+    if (choroDerived.kind === 'heatmap') {
+      return {
+        title: 'Overlai: Transit Desert Index (heatmap)',
+        note:
+          "Konsentrasi kebutuhan transit yang belum terlayani. Makin terang = skor TDI makin tinggi (wilayah makin 'transit desert'). Permukaan interpolasi dari titik pusat sel 300 m, bukan batas sel.",
+        items: [
+          {
+            shape: 'gradient',
+            gradient: VIRIDIS_LEGEND_GRADIENT,
+            labelLeft: 'TDI rendah',
+            labelRight: 'TDI tinggi',
+          },
+        ],
+      }
+    }
+    const bounds = [choroDerived.range[0], ...choroDerived.breaks, choroDerived.range[1]]
+    return {
+      title: 'Overlai: Kepadatan penduduk',
+      note:
+        'Jiwa per sel grid 300 m (dasymetric). Makin gelap makin padat. Kelas dibagi kuantil — tiap kelas ≈ jumlah sel setara.',
+      items: CHOROPLETH_COLORS.map((color, i) => ({
+        color,
+        shape: 'swatch',
+        label: `Kelas ${i + 1} · ${fmtBound(bounds[i])} – ${fmtBound(bounds[i + 1])}`,
+      })),
+    }
+  }, [choroActive, choroDerived])
+
+  // Layer titik/garis konteks. `visible` tiap layer disetel dari panel Layer
+  // (layerVis) — MapView menerapkannya lewat setLayoutProperty('visibility').
   const mapLayers = [
+    // Overlai analitik PALING AWAL (digambar paling BAWAH) supaya rute, marker,
+    // dan batas tetap di atas. Tanpa popupHtml -> klik peta tembus ke
+    // handleMapClick (RPC get_cai_breakdown) seperti biasa. Dua id berbeda
+    // (fill vs heatmap) supaya sinkronisasi layer MapView membongkar-pasang
+    // dengan bersih saat user ganti jenis overlai (bukan setPaintProperty
+    // silang-tipe).
+    ...(choroActive && choroDerived
+      ? choroDerived.kind === 'heatmap'
+        ? [
+            {
+              id: 'overlay-tdi-heatmap',
+              type: 'heatmap',
+              data: choroDerived.fc,
+              paint: {
+                // Grid 300 m = titik BERJARAK SERAGAM, jadi "kepadatan titik"
+                // konstan; yang harus terbaca adalah VARIASI skor_tdi. Karena
+                // itu weight menekan nilai rendah (kurva cekung) supaya sel
+                // ber-TDI tinggi yang menonjol, radius dijaga < jarak antar-sel
+                // (~38 px @ z12) supaya kernel tidak saling tumpuk sampai
+                // saturasi rata, dan intensity ditahan rendah. (Nilai lebih
+                // konservatif dari draf awal 18/40 + intensity 1/3 yang membuat
+                // seluruh kota jadi blok kuning maksimum.)
+                'heatmap-weight': [
+                  'interpolate', ['linear'], ['get', 'skor_tdi'],
+                  0, 0,
+                  0.4, 0.1,
+                  0.65, 0.4,
+                  1, 1,
+                ],
+                'heatmap-intensity': ['interpolate', ['linear'], ['zoom'], 10, 0.4, 14, 1],
+                // Radius ~1x jarak antar-sel supaya kernel berbaur mulus (bukan
+                // titik-titik kotak), tapi intensity rendah supaya tidak saturasi.
+                'heatmap-radius': ['interpolate', ['linear'], ['zoom'], 10, 22, 14, 46],
+                'heatmap-color': [
+                  'interpolate',
+                  ['linear'],
+                  ['heatmap-density'],
+                  0, 'rgba(68,1,84,0)',
+                  0.12, '#440154',
+                  0.35, '#3b528b',
+                  0.55, '#21908d',
+                  0.75, '#5dc963',
+                  1, '#fde725',
+                ],
+                'heatmap-opacity': 0.7,
+              },
+              visible: choroActive,
+            },
+          ]
+        : [
+            {
+              id: 'overlay-choropleth',
+              type: 'fill',
+              data: choroDerived.fc,
+              paint: {
+                'fill-color': stepFillColorExpr(choroDerived.breaks),
+                'fill-opacity': 0.7,
+                'fill-outline-color': 'rgba(255,255,255,0.4)',
+              },
+              visible: choroActive,
+            },
+          ]
+      : []),
     {
       id: 'biskita-koridor-osm',
       type: 'line',
@@ -870,6 +1252,7 @@ export default function App() {
         'line-dasharray': [2, 1.2],
       },
       popupHtml: BISKITA_KORIDOR_OSM_POPUP_HTML,
+      visible: layerVis.koridorBiskita,
     },
     {
       // Jalur LRT Jabodebek — geometri rel ASLI dari OSM (bukan aproksimasi),
@@ -881,6 +1264,7 @@ export default function App() {
       data: lrtJabodebekOsm,
       paint: { 'line-color': RUTE_LRT_COLOR, 'line-width': 3, 'line-opacity': 0.85 },
       popupHtml: LRT_POPUP_HTML,
+      visible: layerVis.lrt,
     },
     ...ruteLayers,
     {
@@ -895,12 +1279,14 @@ export default function App() {
         'circle-opacity': 0.9,
       },
       popupHtml: BISKITA_HALTE_OSM_POPUP_HTML,
+      visible: layerVis.koridorBiskita,
     },
     {
       id: 'batas-kota-bekasi',
       type: 'line',
       data: bekasiBoundary,
       paint: { 'line-color': BATAS_KOTA_COLOR, 'line-width': 2.5, 'line-dasharray': [3, 2] },
+      visible: layerVis.batasKota,
     },
     // Sorotan wilayah terpilih dari pencarian — DITARUH PALING AKHIR supaya
     // digambar di atas semua layer lain (elemen belakang array = paling atas).
@@ -1112,32 +1498,67 @@ export default function App() {
             />
             {activeTab === 'peta' && (
               <MapLegend
-                items={[
-                  // Entri sorotan hanya muncul saat ada wilayah terpilih —
-                  // legenda permanen untuk sesuatu yang biasanya tidak ada di
-                  // peta justru membingungkan. Ditaruh paling atas + menyebut
-                  // nama wilayahnya supaya jelas ini status sementara, bukan
-                  // layer tetap seperti entri di bawahnya.
+                groups={[
+                  // Grup "Pilihan aktif" hanya muncul saat ada wilayah terpilih
+                  // dari pencarian — legenda permanen untuk sesuatu yang biasanya
+                  // tidak ada di peta justru membingungkan. Menyebut nama
+                  // wilayahnya supaya jelas ini status sementara.
                   ...(sorotWilayah
                     ? [{
-                        color: SOROT_WILAYAH_COLOR,
-                        shape: 'line',
-                        lineStyle: 'solid',
-                        label: `Wilayah terpilih (hasil pencarian): ${sorotWilayah.nama}`,
+                        title: 'Pilihan aktif',
+                        items: [{
+                          color: SOROT_WILAYAH_COLOR,
+                          shape: 'line',
+                          lineStyle: 'solid',
+                          label: `Wilayah terpilih: ${sorotWilayah.nama}`,
+                        }],
                       }]
                     : []),
-                  { color: BATAS_KOTA_COLOR, shape: 'line', lineStyle: 'dashed', label: 'Batas Kota Bekasi (area studi)' },
-                  { color: HALTE_TERSURVEI_MARKER_COLOR, shape: 'dot', label: 'Halte tersurvei' },
-                  { color: RUTE_BISKITA_COLOR, shape: 'line', lineStyle: 'solid', label: 'Koridor BisKita (tersurvei, garis aproksimasi)' },
-                  { color: RUTE_BISKITA_OSM_COLOR, shape: 'line', lineStyle: 'dashed', label: 'Koridor BisKita Trans Patriot (aproksimasi OSM)' },
-                  { color: HALTE_BISKITA_OSM_COLOR, shape: 'dot', label: 'Halte BisKita (OSM, belum disurvei)' },
-                  { color: RUTE_KRL_COLOR, shape: 'line', lineStyle: 'dashed', label: 'Jaringan KRL (eksis, belum disurvei)' },
-                  { color: STASIUN_KRL_MARKER_COLOR, shape: 'dot', label: 'Stasiun KRL (eksis, belum disurvei)' },
-                  { color: RUTE_LRT_COLOR, shape: 'line', lineStyle: 'solid', label: 'Jalur LRT Jabodebek (geometri OSM)' },
-                  { color: STASIUN_LRT_MARKER_COLOR, shape: 'dot', label: 'Stasiun LRT Jabodebek (eksis, belum disurvei)' },
-                  { color: CANDIDATE_MARKER_COLOR, shape: 'dot', label: 'Titik survei lapangan (Traffic Counting)' },
-                  { color: USULAN_MODEL_MARKER_COLOR, shape: 'dot', label: 'Usulan halte dari model spasial (belum disurvei)' },
+                  // Grup overlai analitik — hanya saat overlai aktif. Kepadatan:
+                  // kelas kuantil (swatch). TDI: bilah gradien Viridis (heatmap).
+                  // note = cara baca. Colorblind-safe (CLAUDE.md Bab 10.3).
+                  ...(choroLegendGroup ? [choroLegendGroup] : []),
+                  {
+                    title: 'Wilayah & area studi',
+                    items: [
+                      { color: BATAS_KOTA_COLOR, shape: 'line', lineStyle: 'dashed', label: 'Batas Kota Bekasi (area studi)' },
+                    ],
+                  },
+                  {
+                    title: 'Transit tersurvei tim',
+                    items: [
+                      { color: HALTE_TERSURVEI_MARKER_COLOR, icon: legendIconSvg('bus'), label: 'Halte tersurvei' },
+                      { color: RUTE_BISKITA_COLOR, shape: 'line', lineStyle: 'solid', label: 'Koridor BisKita (tersurvei)' },
+                    ],
+                  },
+                  {
+                    title: 'Infrastruktur eksisting — belum disurvei',
+                    items: [
+                      { color: RUTE_BISKITA_OSM_COLOR, shape: 'line', lineStyle: 'dashed', label: 'Koridor BisKita Trans Patriot (OSM)' },
+                      { color: HALTE_BISKITA_OSM_COLOR, shape: 'dot', label: 'Halte BisKita (OSM)' },
+                      { color: RUTE_KRL_COLOR, shape: 'line', lineStyle: 'dashed', label: 'Jaringan KRL' },
+                      { color: STASIUN_KRL_MARKER_COLOR, icon: legendIconSvg('train'), label: 'Stasiun KRL' },
+                      { color: RUTE_LRT_COLOR, shape: 'line', lineStyle: 'solid', label: 'Jalur LRT Jabodebek (geometri OSM)' },
+                      { color: STASIUN_LRT_MARKER_COLOR, icon: legendIconSvg('tram'), label: 'Stasiun LRT Jabodebek' },
+                    ],
+                  },
+                  {
+                    title: 'Titik analisis',
+                    items: [
+                      { color: CANDIDATE_MARKER_COLOR, shape: 'dot', label: 'Titik survei lapangan (Traffic Counting)' },
+                      { color: USULAN_MODEL_MARKER_COLOR, icon: legendIconSvg('pin'), label: 'Usulan halte dari model spasial (belum disurvei)' },
+                    ],
+                  },
                 ]}
+              />
+            )}
+            {activeTab === 'peta' && (
+              <LayerControl
+                value={layerVis}
+                onChange={setLayerVis}
+                analyticOverlay={analyticOverlay}
+                onAnalyticOverlayChange={setAnalyticOverlay}
+                overlayLoading={gridChoroLoading}
               />
             )}
           </MapView>
