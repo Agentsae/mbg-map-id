@@ -242,6 +242,16 @@ const BATAS_KOTA_COLOR = '#1B659D'
 // TODO(ui-ux-designer): emas ini asumsi webgis-developer, bukan keputusan desain final.
 const SOROT_WILAYAH_COLOR = '#CA8A04'
 
+// Ambang jarak (meter) klik-peta -> titik_kandidat terdekat untuk panel CAI.
+// findNearestPoint TIDAK punya batas jarak: tanpa ambang ini, klik di mana pun
+// (bahkan di luar Kota Bekasi) akan menampilkan skor CAI titik survei terdekat
+// seolah itu skor lokasi yang diklik. CAI hanya ada di titik survei lapangan
+// (butuh traffic counting), bukan permukaan kontinu — jadi kalau titik survei
+// terdekat lebih jauh dari ini, panel menampilkan pesan "tidak ada titik di
+// dekat sini", bukan skor yang salah atribusi. 2 km = cukup longgar untuk klik
+// di sela-sela sebaran titik survei dalam kota, tapi menolak klik luar kota.
+const CAI_NEAREST_MAX_M = 2000
+
 function escapeHtml(str) {
   return String(str ?? '').replace(/[&<>"']/g, (c) => (
     { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
@@ -671,12 +681,16 @@ export default function App() {
     setClickMarker({ lat, lon, color: '#334155', popupText: 'Lokasi dicek', pulse: true })
 
     const nearest = findNearestPoint(caiPoints.points, { lat, lon })
+    const dekat = nearest && nearest.distance_m <= CAI_NEAREST_MAX_M
 
     setCaiUsingDemo(caiPoints.usingDemo)
     setCaiResult(
-      nearest
+      dekat
         ? { skor: nearest.point.skor, titik: nearest.point.titik, distance_m: nearest.distance_m }
-        : { skor: null }
+        // Titik survei terdekat di luar ambang (atau daftar kosong): jangan
+        // tampilkan skornya — itu bukan skor lokasi yang diklik. distance_m
+        // tetap dibawa supaya panel bisa bilang "yang terdekat ~X m dari sini".
+        : { skor: null, distance_m: nearest?.distance_m ?? null }
     )
     setCaiLoading(false)
   }, [simulationActive, caiPoints, runSimulationAt])

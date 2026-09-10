@@ -35,9 +35,22 @@ export default function CaiScorePanel({ loading, result, usingDemo, onClose }) {
       )}
 
       {!loading && result && !result.skor && (
-        <div className="p-4 text-sm text-slate-500">
-          Belum ada titik kandidat dengan skor CAI di dekat lokasi ini. Coba klik area yang
-          sudah disurvei (lihat layer titik kandidat).
+        <div className="space-y-1.5 p-4 text-sm text-slate-500">
+          <p>
+            Tidak ada titik survei ber-skor CAI di dekat lokasi ini
+            {result.distance_m != null && (
+              <>
+                {' '}
+                — yang terdekat ~{Math.round(result.distance_m).toLocaleString('id-ID')} m dari sini
+              </>
+            )}
+            .
+          </p>
+          <p className="text-xs text-slate-400">
+            Skor CAI hanya dihitung di titik survei lapangan (marker hijau), bukan untuk
+            sembarang koordinat. Klik lebih dekat ke salah satu titik itu untuk melihat
+            skornya.
+          </p>
         </div>
       )}
 
