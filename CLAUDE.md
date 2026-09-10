@@ -166,6 +166,8 @@ Proyek ini dikerjakan solo (Sam), tapi PRD mendefinisikan 5 peran. Untuk menjaga
 
 Subagent tidak bisa memanggil subagent lain (tidak ada nesting), jadi orkestrasi tetap dari sesi utama — panggil satu per satu atau paralel sesuai kebutuhan, lalu sintesis hasilnya di sesi utama.
 
+**Aturan tetap (Sam, 2026-09-10): tab "Data & Laporan" (`frontend/src/components/DataLaporan/DataLaporan.jsx`, Export Report PDF/PNG) WAJIB ikut diperbarui `webgis-developer` setiap kali ada data/tabel/skor/kartu Dashboard baru** — jangan ditinggal untuk nanti. Laporan sempat tertinggal (belum ada CAI grid / Usulan Halte Prioritas / Potensi Penerima Manfaat sampai 2026-09-10). Tetap "ringkasan satu halaman" (peta + indikator kunci + ranking), bukan dump data; angka baca langsung dari Supabase, jangan hitung ulang CAI/TDI/Equity di sana.
+
 
 
 - `README.md` dan `.gitignore` sempat punya conflict marker git yang ter-commit — cek sudah bersih atau belum
