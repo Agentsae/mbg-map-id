@@ -25,7 +25,7 @@ import DataLaporan from './components/DataLaporan/DataLaporan'
 import LoginPage from './components/Auth/LoginPage'
 import Pengaturan from './components/Pengaturan/Pengaturan'
 import { supabase, isConfigured } from './lib/supabaseClient'
-import { extractLatLon, extractLineStringCoords, findNearestPoint, haversineMeters } from './lib/geo'
+import { extractLatLon, extractLineStringCoords, haversineMeters } from './lib/geo'
 import { isDummyHalte } from './lib/halteEksisting'
 
 // Batas area studi (outline Kota Bekasi) — aset STATIS yang di-bundle saat
@@ -116,6 +116,106 @@ const DEMO_CAI_POINTS = [
     skor: { n_kepadatan: 0.88, n_jarak_inv: 0.85, n_volume: 0.10, n_survei: 0.35, bobot_kepadatan: 0.35, bobot_jarak: 0.25, bobot_volume: 0.25, bobot_survei: 0.15, skor_final: 0.58 },
   },
 ]
+
+// Data contoh rincian CAI — dipakai kalau Supabase belum tersambung, meniru
+// JSON keluaran RPC get_cai_breakdown (migration 033) APA ADANYA. CAI kini
+// SURFACE grid 300 m (grid_analisis), bukan lagi 19 titik_kandidat diskret —
+// jadi bentuk ini per-sel, bukan per-titik. TIDAK ada formula dihitung di sini:
+// `kontribusi` sudah = nilai x bobot, murni angka contoh statis.
+//   * DEMO_CAI_BREAKDOWN         -> kasus mayoritas sel: 2 kriteria aktif
+//     (kepadatan + jarak), bobot efektif 0,5 / 0,5 (rasio AHP kepadatan=jarak).
+//   * DEMO_CAI_BREAKDOWN_VOLUME  -> sel dekat titik cacah lapangan: 3 kriteria
+//     (kepadatan + jarak + volume), bobot efektif 0,3834 / 0,3834 / 0,2331.
+// handleMapClick memilih salah satunya berdasar titik DEMO_CAI_POINTS terdekat
+// (hanya untuk variasi tampilan — jarak tidak lagi jadi gerbang apa pun).
+const DEMO_CAI_BREAKDOWN = {
+  ditemukan: true,
+  cell_id: 1487,
+  match: 'memuat',
+  jarak_ke_sel_m: 0,
+  skor_cai: 0.5316,
+  skor_cai_reproduksi: 0.5316,
+  formula:
+    'cai_skor = Σ( nilai_ternormalisasi_i × bobot_efektif_i ) untuk kriteria AKTIF di sel; ' +
+    'tiap nilai dinormalisasi min-max 0–1; bobot dari AHP pairwise Saaty (konfigurasi_bobot ' +
+    "nama_index='CAI'), subset kriteria aktif direnormalisasi ke jumlah 1. Model ADITIF (WLC), " +
+    'bukan rasio seperti TDI.',
+  volume_estimasi: false,
+  komponen: [
+    {
+      kunci: 'kepadatan',
+      label: 'Kepadatan penduduk',
+      nilai: 0.618,
+      bobot: 0.5,
+      kontribusi: 0.309,
+      nilai_mentah: 7284.15,
+      satuan: 'jiwa per sel (~300 × 300 m, dasymetric mapping)',
+      arah: 'Makin padat → skor CAI naik (prioritas naik)',
+    },
+    {
+      kunci: 'jarak_fasilitas_inv',
+      label: 'Jarak ke fasilitas umum (inverse)',
+      nilai: 0.4452,
+      bobot: 0.5,
+      kontribusi: 0.2226,
+      nilai_mentah: 612.4,
+      satuan: 'meter ke POI fasilitas umum terdekat (sekolah/faskes/kerja, OSM; dibatasi 3000 m)',
+      arah: 'Makin dekat → skor CAI naik',
+    },
+  ],
+  catatan:
+    'Data contoh — surface CAI grid 300 m HYBRID: kepadatan (dasymetric) & jarak POI (OSM) ' +
+    'diturunkan dari geodata di setiap sel. Kriteria volume transit N/A untuk sel ini (tidak ada ' +
+    'titik cacah lapangan ≤ 300 m); kriteria survei kondisi halte N/A (tidak ada halte tersurvei ' +
+    '≤ 400 m). Bobot 2 kriteria sisanya (kepadatan, jarak) direnormalisasi ke jumlah 1.',
+}
+
+const DEMO_CAI_BREAKDOWN_VOLUME = {
+  ditemukan: true,
+  cell_id: 803,
+  match: 'terdekat',
+  jarak_ke_sel_m: 128,
+  skor_cai: 0.632,
+  skor_cai_reproduksi: 0.632,
+  formula: DEMO_CAI_BREAKDOWN.formula,
+  volume_estimasi: false,
+  komponen: [
+    {
+      kunci: 'kepadatan',
+      label: 'Kepadatan penduduk',
+      nilai: 0.701,
+      bobot: 0.3834,
+      kontribusi: 0.2688,
+      nilai_mentah: 9105.6,
+      satuan: 'jiwa per sel (~300 × 300 m, dasymetric mapping)',
+      arah: 'Makin padat → skor CAI naik (prioritas naik)',
+    },
+    {
+      kunci: 'jarak_fasilitas_inv',
+      label: 'Jarak ke fasilitas umum (inverse)',
+      nilai: 0.523,
+      bobot: 0.3834,
+      kontribusi: 0.2005,
+      nilai_mentah: 445,
+      satuan: 'meter ke POI fasilitas umum terdekat (sekolah/faskes/kerja, OSM; dibatasi 3000 m)',
+      arah: 'Makin dekat → skor CAI naik',
+    },
+    {
+      kunci: 'volume',
+      label: 'Volume penumpang / aktivitas transit',
+      nilai: 0.698,
+      bobot: 0.2331,
+      kontribusi: 0.1627,
+      nilai_mentah: 412,
+      satuan: 'aktivitas / 2 jam (traffic counting lapangan, titik survei ≤ 300 m)',
+      arah: 'Makin tinggi → skor CAI naik',
+    },
+  ],
+  catatan:
+    'Data contoh — surface CAI grid 300 m HYBRID: sel ini ≤ 300 m dari titik cacah lapangan, jadi ' +
+    'kriteria volume transit AKTIF (traffic counting riil). Kriteria survei kondisi halte N/A ' +
+    '(tidak ada halte tersurvei ≤ 400 m); bobot 3 kriteria sisanya direnormalisasi ke jumlah 1.',
+}
 
 // Data contoh halte_eksisting — dipakai kalau Supabase belum tersambung/tabel
 // masih kosong, supaya layer "jaringan transit eksisting" (acceptance criteria
@@ -241,16 +341,6 @@ const BATAS_KOTA_COLOR = '#1B659D'
 // Tidak memakai pasangan merah–hijau sama sekali.
 // TODO(ui-ux-designer): emas ini asumsi webgis-developer, bukan keputusan desain final.
 const SOROT_WILAYAH_COLOR = '#CA8A04'
-
-// Ambang jarak (meter) klik-peta -> titik_kandidat terdekat untuk panel CAI.
-// findNearestPoint TIDAK punya batas jarak: tanpa ambang ini, klik di mana pun
-// (bahkan di luar Kota Bekasi) akan menampilkan skor CAI titik survei terdekat
-// seolah itu skor lokasi yang diklik. CAI hanya ada di titik survei lapangan
-// (butuh traffic counting), bukan permukaan kontinu — jadi kalau titik survei
-// terdekat lebih jauh dari ini, panel menampilkan pesan "tidak ada titik di
-// dekat sini", bukan skor yang salah atribusi. 2 km = cukup longgar untuk klik
-// di sela-sela sebaran titik survei dalam kota, tapi menolak klik luar kota.
-const CAI_NEAREST_MAX_M = 2000
 
 function escapeHtml(str) {
   return String(str ?? '').replace(/[&<>"']/g, (c) => (
@@ -673,27 +763,49 @@ export default function App() {
       return
     }
 
-    // --- Alur skor CAI (klik lokasi -> cari titik_kandidat terdekat) ---
+    // --- Alur skor CAI (klik lokasi -> RPC get_cai_breakdown, surface grid 300 m) ---
+    // Sejak CAI pindah dari 19 titik_kandidat diskret ke SURFACE grid 300 m
+    // (grid_analisis, migration 033), skor CAI tersedia untuk SEMBARANG
+    // koordinat di area berpenduduk Kota Bekasi — bukan lagi lookup tetangga
+    // terdekat + ambang jarak. RPC HANYA menyajikan kolom cai_* yang sudah
+    // dihitung offline (etl/compute_cai_grid.py); frontend tidak menghitung
+    // ulang formula CAI. setCaiResult diisi JSON RPC apa adanya (CaiScorePanel
+    // yang mem-parse bentuk ditemukan:true / ditemukan:false).
     setCaiLoading(true)
     setSimResult(null)
     // Slate netral — marker transient "titik yang baru diklik", sengaja bukan
     // warna layer data mana pun. Marker simulasi sudah oranye.
     setClickMarker({ lat, lon, color: '#334155', popupText: 'Lokasi dicek', pulse: true })
 
-    const nearest = findNearestPoint(caiPoints.points, { lat, lon })
-    const dekat = nearest && nearest.distance_m <= CAI_NEAREST_MAX_M
-
-    setCaiUsingDemo(caiPoints.usingDemo)
-    setCaiResult(
-      dekat
-        ? { skor: nearest.point.skor, titik: nearest.point.titik, distance_m: nearest.distance_m }
-        // Titik survei terdekat di luar ambang (atau daftar kosong): jangan
-        // tampilkan skornya — itu bukan skor lokasi yang diklik. distance_m
-        // tetap dibawa supaya panel bisa bilang "yang terdekat ~X m dari sini".
-        : { skor: null, distance_m: nearest?.distance_m ?? null }
-    )
+    if (isConfigured) {
+      setCaiUsingDemo(false)
+      try {
+        const { data, error } = await supabase.rpc('get_cai_breakdown', { lng: lon, lat })
+        if (error) throw error
+        setCaiResult(data)
+      } catch (err) {
+        console.error('Gagal memanggil get_cai_breakdown:', err)
+        setCaiResult({ ditemukan: false, pesan: 'Gagal memuat skor CAI.' })
+      }
+    } else {
+      // Mode demo: pilih ragam breakdown menurut titik DEMO_CAI_POINTS terdekat
+      // (jaraknya TIDAK lagi jadi gerbang apa pun — cuma untuk memvariasikan
+      // tampilan antara kasus 2-kriteria dan 3-kriteria + volume).
+      setCaiUsingDemo(true)
+      let terdekat = null
+      let jarakMin = Infinity
+      for (const p of DEMO_CAI_POINTS) {
+        const d = haversineMeters(p, { lat, lon })
+        if (d < jarakMin) {
+          jarakMin = d
+          terdekat = p
+        }
+      }
+      const pakaiVolume = (terdekat?.skor?.n_volume ?? 0) >= 0.5
+      setCaiResult(pakaiVolume ? DEMO_CAI_BREAKDOWN_VOLUME : DEMO_CAI_BREAKDOWN)
+    }
     setCaiLoading(false)
-  }, [simulationActive, caiPoints, runSimulationAt])
+  }, [simulationActive, runSimulationAt])
 
   function handleToggleSimulation() {
     setSimulationActive((v) => !v)
@@ -710,10 +822,11 @@ export default function App() {
   const activeLabel = TABS.find((t) => t.id === activeTab)?.label ?? 'GeoTransit Insight'
 
   // Marker visual untuk seluruh titik_kandidat (supaya user LIHAT titik di peta
-  // dulu, bukan menebak lokasi lalu klik "buta") + marker lokasi yang baru
-  // diklik bebas (kalau ada). Klik langsung pada marker titik kandidat memanggil
-  // handleMapClick di koordinat titik itu sendiri (nearest-search akan
-  // menemukan dirinya sendiri, distance ~0m).
+  // dulu, bukan menebak lokasi lalu klik "buta"). Ke-19 marker ini tetap
+  // menandai titik survei lapangan. Klik langsung pada marker memanggil
+  // handleMapClick di koordinat titik itu sendiri — yang kini mengenai RPC
+  // get_cai_breakdown pada sel grid 300 m yang memuat titik tsb (sel itu punya
+  // volume terukur, jadi breakdown 3-4 kriteria).
   // Di-useMemo supaya identitas array marker STABIL antar-render (kalau tidak,
   // MapView membongkar-pasang seluruh marker + popup terbuka tiap kali App
   // re-render — mis. saat fetch data selesai / panel skor dibuka).
