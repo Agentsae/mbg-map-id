@@ -1580,7 +1580,7 @@ export default function App() {
               />
             )}
             {activeTab === 'rekomendasi' && <EquityIndexView />}
-            {activeTab === 'data-laporan' && <DataLaporan />}
+            {activeTab === 'data-laporan' && <DataLaporan mapInstance={mapInstance} />}
             {activeTab === 'pengaturan' && (
               <Pengaturan session={session} onLoggedOut={() => setActiveTab('peta')} />
             )}
