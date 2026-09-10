@@ -635,7 +635,7 @@ export default function App() {
     if (focusTab) setActiveTab('simulasi')
     setSimLoading(true)
     setCaiResult(null)
-    setClickMarker({ lat, lon, color: '#E08A1E', popupText })
+    setClickMarker({ lat, lon, color: '#E08A1E', popupText, pulse: true })
 
     try {
       if (isConfigured) {
@@ -668,7 +668,7 @@ export default function App() {
     setSimResult(null)
     // Slate netral — marker transient "titik yang baru diklik", sengaja bukan
     // warna layer data mana pun. Marker simulasi sudah oranye.
-    setClickMarker({ lat, lon, color: '#334155', popupText: 'Lokasi dicek' })
+    setClickMarker({ lat, lon, color: '#334155', popupText: 'Lokasi dicek', pulse: true })
 
     const nearest = findNearestPoint(caiPoints.points, { lat, lon })
 
@@ -1112,31 +1112,53 @@ export default function App() {
             />
             {activeTab === 'peta' && (
               <MapLegend
-                items={[
-                  // Entri sorotan hanya muncul saat ada wilayah terpilih —
-                  // legenda permanen untuk sesuatu yang biasanya tidak ada di
-                  // peta justru membingungkan. Ditaruh paling atas + menyebut
-                  // nama wilayahnya supaya jelas ini status sementara, bukan
-                  // layer tetap seperti entri di bawahnya.
+                groups={[
+                  // Grup "Pilihan aktif" hanya muncul saat ada wilayah terpilih
+                  // dari pencarian — legenda permanen untuk sesuatu yang biasanya
+                  // tidak ada di peta justru membingungkan. Menyebut nama
+                  // wilayahnya supaya jelas ini status sementara.
                   ...(sorotWilayah
                     ? [{
-                        color: SOROT_WILAYAH_COLOR,
-                        shape: 'line',
-                        lineStyle: 'solid',
-                        label: `Wilayah terpilih (hasil pencarian): ${sorotWilayah.nama}`,
+                        title: 'Pilihan aktif',
+                        items: [{
+                          color: SOROT_WILAYAH_COLOR,
+                          shape: 'line',
+                          lineStyle: 'solid',
+                          label: `Wilayah terpilih: ${sorotWilayah.nama}`,
+                        }],
                       }]
                     : []),
-                  { color: BATAS_KOTA_COLOR, shape: 'line', lineStyle: 'dashed', label: 'Batas Kota Bekasi (area studi)' },
-                  { color: HALTE_TERSURVEI_MARKER_COLOR, shape: 'dot', label: 'Halte tersurvei' },
-                  { color: RUTE_BISKITA_COLOR, shape: 'line', lineStyle: 'solid', label: 'Koridor BisKita (tersurvei, garis aproksimasi)' },
-                  { color: RUTE_BISKITA_OSM_COLOR, shape: 'line', lineStyle: 'dashed', label: 'Koridor BisKita Trans Patriot (aproksimasi OSM)' },
-                  { color: HALTE_BISKITA_OSM_COLOR, shape: 'dot', label: 'Halte BisKita (OSM, belum disurvei)' },
-                  { color: RUTE_KRL_COLOR, shape: 'line', lineStyle: 'dashed', label: 'Jaringan KRL (eksis, belum disurvei)' },
-                  { color: STASIUN_KRL_MARKER_COLOR, shape: 'dot', label: 'Stasiun KRL (eksis, belum disurvei)' },
-                  { color: RUTE_LRT_COLOR, shape: 'line', lineStyle: 'solid', label: 'Jalur LRT Jabodebek (geometri OSM)' },
-                  { color: STASIUN_LRT_MARKER_COLOR, shape: 'dot', label: 'Stasiun LRT Jabodebek (eksis, belum disurvei)' },
-                  { color: CANDIDATE_MARKER_COLOR, shape: 'dot', label: 'Titik survei lapangan (Traffic Counting)' },
-                  { color: USULAN_MODEL_MARKER_COLOR, shape: 'dot', label: 'Usulan halte dari model spasial (belum disurvei)' },
+                  {
+                    title: 'Wilayah & area studi',
+                    items: [
+                      { color: BATAS_KOTA_COLOR, shape: 'line', lineStyle: 'dashed', label: 'Batas Kota Bekasi (area studi)' },
+                    ],
+                  },
+                  {
+                    title: 'Transit tersurvei tim',
+                    items: [
+                      { color: HALTE_TERSURVEI_MARKER_COLOR, shape: 'dot', label: 'Halte tersurvei' },
+                      { color: RUTE_BISKITA_COLOR, shape: 'line', lineStyle: 'solid', label: 'Koridor BisKita (tersurvei)' },
+                    ],
+                  },
+                  {
+                    title: 'Infrastruktur eksisting — belum disurvei',
+                    items: [
+                      { color: RUTE_BISKITA_OSM_COLOR, shape: 'line', lineStyle: 'dashed', label: 'Koridor BisKita Trans Patriot (OSM)' },
+                      { color: HALTE_BISKITA_OSM_COLOR, shape: 'dot', label: 'Halte BisKita (OSM)' },
+                      { color: RUTE_KRL_COLOR, shape: 'line', lineStyle: 'dashed', label: 'Jaringan KRL' },
+                      { color: STASIUN_KRL_MARKER_COLOR, shape: 'dot', label: 'Stasiun KRL' },
+                      { color: RUTE_LRT_COLOR, shape: 'line', lineStyle: 'solid', label: 'Jalur LRT Jabodebek (geometri OSM)' },
+                      { color: STASIUN_LRT_MARKER_COLOR, shape: 'dot', label: 'Stasiun LRT Jabodebek' },
+                    ],
+                  },
+                  {
+                    title: 'Titik analisis',
+                    items: [
+                      { color: CANDIDATE_MARKER_COLOR, shape: 'dot', label: 'Titik survei lapangan (Traffic Counting)' },
+                      { color: USULAN_MODEL_MARKER_COLOR, shape: 'dot', label: 'Usulan halte dari model spasial (belum disurvei)' },
+                    ],
+                  },
                 ]}
               />
             )}
