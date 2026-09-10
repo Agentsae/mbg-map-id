@@ -44,6 +44,7 @@ export default function DataLaporan() {
   const [loadingModel, setLoadingModel] = useState(isConfigured)
   const [exporting, setExporting] = useState(null) // 'png' | 'pdf' | null
   const [note, setNote] = useState(null)
+  const [mapReady, setMapReady] = useState(false)
   const mapObjRef = useRef(null)
 
   useEffect(() => {
@@ -168,15 +169,123 @@ export default function DataLaporan() {
     ]
   }
 
-  function getMapCanvas() {
+  /**
+   * captureMap — helper tunggal yang dipakai BERSAMA oleh exportPng & exportPdf
+   * supaya perilaku kesiapan/redraw/deteksi-blank konsisten di kedua jalur.
+   *
+   * Mengembalikan { canvas, dataUrl, note }:
+   *   - canvas  : HTMLCanvasElement peta yang SUDAH dipastikan tergambar, atau null
+   *   - dataUrl : hasil toDataURL('image/png') dari canvas itu, atau null
+   *   - note    : string alasan kalau peta TIDAK bisa disertakan (blank / CORS /
+   *               belum siap) — laporan tetap dibuat tanpa blok peta, tidak throw.
+   *
+   * Kenapa perlu ini: MapLibre `triggerRepaint()` ASINKRON (menjadwalkan frame
+   * berikutnya), jadi membaca `getCanvas()` tepat setelahnya sering menangkap
+   * drawing buffer yang belum dicat -> tangkapan kosong. `map.redraw()` di
+   * maplibre-gl v6 adalah render paksa SINKRON.
+   */
+  async function captureMap() {
     const map = mapObjRef.current
-    if (!map) return null
-    try {
-      map.triggerRepaint()
-      return map.getCanvas()
-    } catch {
-      return null
+    if (!map) {
+      return {
+        canvas: null,
+        dataUrl: null,
+        note: 'Peta belum siap — buka tab ini dan tunggu peta tampil sebelum mengunduh.',
+      }
     }
+
+    // 1) Kalau style/tile belum settle, tunggu 'idle' ATAU timeout ~6 dtk
+    //    (mana yang lebih dulu) — basemap MAPID kadang lambat / tak pernah idle,
+    //    jangan menggantung ekspor selamanya.
+    try {
+      const styleReady = typeof map.isStyleLoaded === 'function' ? map.isStyleLoaded() : true
+      const fullyLoaded = typeof map.loaded === 'function' ? map.loaded() : true
+      if (!styleReady || !fullyLoaded) {
+        await new Promise((resolve) => {
+          let done = false
+          const finish = () => {
+            if (done) return
+            done = true
+            clearTimeout(timer)
+            try { map.off('idle', finish) } catch { /* noop */ }
+            resolve()
+          }
+          const timer = setTimeout(finish, 6000)
+          map.once('idle', finish)
+        })
+      }
+    } catch { /* lanjut — coba tangkap apa adanya */ }
+
+    // 2) Render paksa SINKRON, lalu tunggu dua rAF supaya minimal satu frame
+    //    benar-benar di-commit ke drawing buffer sebelum dibaca.
+    try {
+      if (typeof map.redraw === 'function') map.redraw()
+      else if (typeof map.triggerRepaint === 'function') map.triggerRepaint()
+    } catch { /* noop */ }
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
+
+    // 3) Baca canvas
+    let mapCanvas
+    try {
+      mapCanvas = map.getCanvas()
+    } catch {
+      mapCanvas = null
+    }
+    if (!mapCanvas) {
+      return {
+        canvas: null,
+        dataUrl: null,
+        note: 'Tidak bisa membaca kanvas peta — coba lagi setelah peta selesai dimuat.',
+      }
+    }
+
+    // 4) Deteksi kanvas kosong (semua piksel identik / transparan penuh).
+    //    getImageData bisa melempar SecurityError kalau kanvas ter-taint CORS
+    //    (mis. basemap OSM fallback tanpa key MAPID) -> perlakukan sebagai
+    //    "tidak bisa disalin".
+    try {
+      if (isBlankCanvas(mapCanvas)) {
+        return {
+          canvas: null,
+          dataUrl: null,
+          note:
+            'Peta belum selesai dirender — tunggu beberapa detik setelah membuka tab ini, lalu coba unduh lagi.',
+        }
+      }
+    } catch (err) {
+      if (err && err.name === 'SecurityError') {
+        return {
+          canvas: null,
+          dataUrl: null,
+          note:
+            'Basemap tidak mengizinkan penyalinan gambar (mode fallback tanpa MAPID Maps) — peta tidak ikut di file.',
+        }
+      }
+      // Kegagalan lain saat cek: jangan halangi ekspor, lanjut coba salin.
+    }
+
+    // 5) Salin ke dataURL (dipakai jalur PDF; jalur PNG pakai drawImage(canvas)).
+    //    SecurityError di sini = kanvas ter-taint -> laporan tanpa peta.
+    let dataUrl = null
+    try {
+      dataUrl = mapCanvas.toDataURL('image/png')
+    } catch (err) {
+      if (err && err.name === 'SecurityError') {
+        return {
+          canvas: null,
+          dataUrl: null,
+          note:
+            'Basemap tidak mengizinkan penyalinan gambar (mode fallback tanpa MAPID Maps) — peta tidak ikut di file.',
+        }
+      }
+      return {
+        canvas: null,
+        dataUrl: null,
+        note: 'Gagal menyalin gambar peta — peta tidak ikut di file.',
+      }
+    }
+
+    return { canvas: mapCanvas, dataUrl, note: null }
   }
 
   async function exportPng() {
@@ -185,7 +294,9 @@ export default function DataLaporan() {
     try {
       const W = 960
       const pad = 40
-      const mapCanvas = getMapCanvas()
+      const cap = await captureMap()
+      if (cap.note) setNote(cap.note)
+      const mapCanvas = cap.canvas
       const lines = buildLines()
       const equity = model.equityTop
 
@@ -259,7 +370,7 @@ export default function DataLaporan() {
     }
   }
 
-  function exportPdf() {
+  async function exportPdf() {
     setExporting('pdf')
     setNote(null)
     try {
@@ -277,11 +388,12 @@ export default function DataLaporan() {
       doc.text(`Kota Bekasi · dibuat ${nowLabel()}`, margin, y)
       y += 8
 
-      const mapCanvas = getMapCanvas()
-      if (mapCanvas) {
+      const cap = await captureMap()
+      if (cap.note) setNote(cap.note)
+      if (cap.canvas && cap.dataUrl) {
         const imgW = pageW - margin * 2
-        const imgH = (imgW * mapCanvas.height) / mapCanvas.width
-        doc.addImage(mapCanvas.toDataURL('image/png'), 'PNG', margin, y, imgW, imgH)
+        const imgH = (imgW * cap.canvas.height) / cap.canvas.width
+        doc.addImage(cap.dataUrl, 'PNG', margin, y, imgW, imgH)
         doc.setDrawColor('#cbd5e1')
         doc.rect(margin, y, imgW, imgH)
         y += imgH + 8
@@ -360,7 +472,13 @@ export default function DataLaporan() {
         </p>
 
         <div className="rounded-lg overflow-hidden border border-slate-200 h-52">
-          <MapView layers={reportLayers} onMapReady={(m) => { mapObjRef.current = m }} />
+          <MapView
+            layers={reportLayers}
+            onMapReady={(m) => {
+              mapObjRef.current = m
+              setMapReady(true)
+            }}
+          />
         </div>
 
         <div className="rounded-lg border border-slate-200 p-3 space-y-1.5 text-xs">
@@ -390,7 +508,7 @@ export default function DataLaporan() {
         <div className="flex gap-2">
           <button
             onClick={exportPdf}
-            disabled={exporting != null}
+            disabled={exporting != null || !mapReady}
             className="flex-1 flex items-center justify-center gap-1.5 bg-brand-blue text-white rounded-md px-3 py-2 text-sm font-medium disabled:opacity-50"
           >
             {exporting === 'pdf' ? <Loader2 size={15} className="animate-spin" /> : <FileText size={15} />}
@@ -398,7 +516,7 @@ export default function DataLaporan() {
           </button>
           <button
             onClick={exportPng}
-            disabled={exporting != null}
+            disabled={exporting != null || !mapReady}
             className="flex-1 flex items-center justify-center gap-1.5 bg-slate-100 text-slate-700 rounded-md px-3 py-2 text-sm font-medium hover:bg-slate-200 disabled:opacity-50"
           >
             {exporting === 'png' ? <Loader2 size={15} className="animate-spin" /> : <FileImage size={15} />}
@@ -407,6 +525,7 @@ export default function DataLaporan() {
         </div>
         <p className="text-[10px] text-slate-400">
           Tip: tunggu peta selesai dimuat sebelum mengunduh agar tampilan peta ikut terekam.
+          {!mapReady && ' (Tombol unduh aktif setelah peta siap.)'}
         </p>
       </div>
     </div>
@@ -415,6 +534,42 @@ export default function DataLaporan() {
 
 function fileStamp() {
   return new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')
+}
+
+/**
+ * isBlankCanvas — true kalau tangkapan peta praktis kosong: setiap piksel
+ * transparan penuh, ATAU semua piksel identik (satu warna rata, mis. abu-abu
+ * placeholder sebelum tile pertama tercat). Sampling 32x32 sudah cukup untuk
+ * membedakan "ada peta" vs "buffer belum dicat" tanpa biaya baca full-res.
+ * Melempar SecurityError kalau kanvas sumber ter-taint CORS (ditangani pemanggil).
+ */
+function isBlankCanvas(srcCanvas) {
+  const s = document.createElement('canvas')
+  s.width = 32
+  s.height = 32
+  const sctx = s.getContext('2d')
+  if (!sctx) return false
+  sctx.drawImage(srcCanvas, 0, 0, 32, 32)
+  const { data } = sctx.getImageData(0, 0, 32, 32) // dapat melempar SecurityError
+  const r0 = data[0]
+  const g0 = data[1]
+  const b0 = data[2]
+  const a0 = data[3]
+  let allTransparent = true
+  let allIdentical = true
+  for (let i = 0; i < data.length; i += 4) {
+    if (data[i + 3] !== 0) allTransparent = false
+    if (
+      data[i] !== r0 ||
+      data[i + 1] !== g0 ||
+      data[i + 2] !== b0 ||
+      data[i + 3] !== a0
+    ) {
+      allIdentical = false
+    }
+    if (!allTransparent && !allIdentical) return false
+  }
+  return allTransparent || allIdentical
 }
 
 function triggerDownload(blob, filename) {
