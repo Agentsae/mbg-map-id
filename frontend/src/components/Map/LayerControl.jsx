@@ -96,7 +96,11 @@ export default function LayerControl({
           <p className="mt-1 text-[10px] leading-snug text-slate-400">
             {overlayLoading
               ? 'Memuat grid 300 m…'
-              : 'Choropleth grid 300 m (YlGnBu). Rincian kelas ada di Keterangan Peta.'}
+              : analyticOverlay === 'tdi'
+                ? 'Heatmap dari titik pusat sel 300 m (Viridis). Keterangan di Keterangan Peta.'
+                : analyticOverlay === 'kepadatan'
+                  ? 'Choropleth grid 300 m, kelas kuantil (YlGnBu). Rincian kelas di Keterangan Peta.'
+                  : 'Pilih overlai untuk menampilkan kepadatan atau Transit Desert Index di peta.'}
           </p>
         </div>
 

@@ -12,6 +12,8 @@
 // Ini murni format/normalisasi tampilan; TIDAK menghitung ulang CAI/TDI/Equity
 // Index (angka datang apa adanya dari grid_analisis yang dihitung data-ai-analyst).
 
+import { ringAveragePoint } from './geo'
+
 export const CHOROPLETH_COLORS = ['#ffffcc', '#a1dab4', '#41b6c4', '#2c7fb8', '#253494']
 export const CLASS_COUNT = CHOROPLETH_COLORS.length
 
@@ -22,6 +24,33 @@ export const CLASS_COUNT = CHOROPLETH_COLORS.length
 export function classBreaks([min, max], n) {
   const span = (max - min) / n
   return Array.from({ length: n - 1 }, (_, i) => min + span * (i + 1))
+}
+
+/**
+ * Ambang kelas KUANTIL pada rentang nilai -> (n-1) nilai batas: tiap kelas
+ * memuat kira-kira jumlah sel yang sama. Dipakai overlai "Kepadatan penduduk"
+ * di Peta Interaktif supaya variasi kepadatan terbaca (equal-interval linear
+ * menumpuk mayoritas sel di kelas terendah -> peta nyaris polos).
+ * classBreaks (equal-interval) SENGAJA tidak diubah — AnalisisSpasial.jsx masih
+ * memakainya. Hasil dijamin strictly ascending (nilai duplikat didorong tipis)
+ * supaya ekspresi 'step' MapLibre tidak menolak.
+ */
+export function quantileBreaks(values, n) {
+  const nums = values
+    .filter((v) => typeof v === 'number' && !Number.isNaN(v))
+    .sort((a, b) => a - b)
+  if (nums.length < 2) return classBreaks(computeMinMax(values), n)
+  const breaks = []
+  for (let i = 1; i < n; i++) {
+    const pos = (i / n) * (nums.length - 1)
+    const lo = Math.floor(pos)
+    const hi = Math.ceil(pos)
+    breaks.push(nums[lo] + (nums[hi] - nums[lo]) * (pos - lo))
+  }
+  for (let i = 1; i < breaks.length; i++) {
+    if (breaks[i] <= breaks[i - 1]) breaks[i] = breaks[i - 1] + 1e-6
+  }
+  return breaks
 }
 
 /**
@@ -58,8 +87,31 @@ export function toPolygonFeatureCollection(cells, valueFn) {
 }
 
 /**
+ * FeatureCollection Point dari daftar sel { ring, ... } — 1 titik pusat per sel
+ * (rata-rata vertex ring, ringAveragePoint) dengan properti `skor_tdi` diambil
+ * dari cell[valueKey]. Dipakai untuk layer heatmap TDI (permukaan interpolasi
+ * dari titik, bukan poligon batas sel).
+ */
+export function toCentroidPointFC(cells, valueKey) {
+  return {
+    type: 'FeatureCollection',
+    features: cells
+      .map((c) => {
+        const p = ringAveragePoint(c.ring)
+        if (!p) return null
+        return {
+          type: 'Feature',
+          geometry: { type: 'Point', coordinates: [p.lon, p.lat] },
+          properties: { skor_tdi: Number(c[valueKey]) || 0 },
+        }
+      })
+      .filter(Boolean),
+  }
+}
+
+/**
  * Ekspresi 'step' MapLibre untuk fill-color diskret dari daftar ambang kelas
- * (hasil classBreaks) + CHOROPLETH_COLORS.
+ * (hasil classBreaks / quantileBreaks) + CHOROPLETH_COLORS.
  */
 export function stepFillColorExpr(breaks) {
   const expr = ['step', ['get', 'value'], CHOROPLETH_COLORS[0]]

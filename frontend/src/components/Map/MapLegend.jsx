@@ -12,8 +12,12 @@ import { ChevronDown, ChevronUp, Layers } from 'lucide-react'
  * State lokal saja, tidak dipersistenkan.
  *
  * Props:
- * - groups: Array<{ title?: string, items: LegendItem[] }>
- *   LegendItem = { color, label, shape?: 'dot'|'line'|'swatch', lineStyle?: 'solid'|'dashed', icon?: string }
+ * - groups: Array<{ title?: string, note?: string, items: LegendItem[] }>
+ *   - note (opsional) — satu baris teks redup di bawah judul grup, untuk
+ *     keterangan singkat cara baca layer (mis. choropleth/heatmap).
+ *   LegendItem = { color, label, shape?: 'dot'|'line'|'swatch'|'gradient',
+ *                  lineStyle?: 'solid'|'dashed', icon?: string,
+ *                  gradient?: string, labelLeft?: string, labelRight?: string }
  *   - icon (SVG string) — kalau ada, swatch = badge ikon kecil berwarna
  *     `color` (glyph moda transit: bus/kereta/trem/pin) supaya legenda cocok
  *     dengan marker ikon di peta. Didahulukan dari `shape`.
@@ -21,6 +25,9 @@ import { ChevronDown, ChevronUp, Layers } from 'lucide-react'
  *   - shape 'line' — layer garis (rute BisKita/KRL), dengan lineStyle
  *     'solid'/'dashed' supaya legenda ikut mencerminkan beda BENTUK garis
  *     di peta, bukan cuma beda warna (syarat colorblind-safe CLAUDE.md).
+ *   - shape 'gradient' — bilah gradien horizontal (`gradient` = CSS background)
+ *     dengan label kiri/kanan (`labelLeft`/`labelRight`), untuk heatmap yang
+ *     tidak punya kelas diskret.
  *   - shape 'swatch' — blok warna persegi, dipakai untuk kelas choropleth
  *     (overlai analitik). Label sudah memuat nomor kelas + rentang angka
  *     sebagai pembeda non-warna.
@@ -61,20 +68,48 @@ export default function MapLegend({ groups }) {
         {groups.map((group, gi) => (
           <div key={group.title || gi}>
             {group.title && (
-              <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+              <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
                 {group.title}
               </p>
             )}
+            {group.note && (
+              <p className="mb-1.5 text-[10px] leading-snug text-slate-400">{group.note}</p>
+            )}
             <div className="space-y-1.5">
-              {group.items.map(({ color, label, shape = 'dot', lineStyle = 'solid', icon }) => (
-                <div key={label} className="flex items-center gap-2">
-                  {icon ? (
-                    <span
-                      className="inline-flex h-4 w-4 shrink-0 items-center justify-center overflow-hidden rounded-[4px] border bg-white"
-                      style={{ color, borderColor: color }}
-                      dangerouslySetInnerHTML={{ __html: icon }}
-                    />
-                  ) : shape === 'swatch' ? (
+              {group.items.map((item) => {
+                const {
+                  color,
+                  label,
+                  shape = 'dot',
+                  lineStyle = 'solid',
+                  icon,
+                  gradient,
+                  labelLeft,
+                  labelRight,
+                } = item
+                if (shape === 'gradient') {
+                  return (
+                    <div key={label || 'gradient'} className="space-y-1">
+                      <span
+                        className="block h-4 w-full rounded-sm border border-slate-300"
+                        style={{ background: gradient }}
+                      />
+                      <div className="flex justify-between text-[10px] text-slate-400">
+                        <span>{labelLeft}</span>
+                        <span>{labelRight}</span>
+                      </div>
+                    </div>
+                  )
+                }
+                return (
+                  <div key={label} className="flex items-center gap-2">
+                    {icon ? (
+                      <span
+                        className="inline-flex h-4 w-4 shrink-0 items-center justify-center overflow-hidden rounded-[4px] border bg-white"
+                        style={{ color, borderColor: color }}
+                        dangerouslySetInnerHTML={{ __html: icon }}
+                      />
+                    ) : shape === 'swatch' ? (
                     <span
                       className="inline-block h-3 w-4 shrink-0 rounded-sm border border-slate-300"
                       style={{ background: color }}
@@ -91,10 +126,11 @@ export default function MapLegend({ groups }) {
                       className="inline-block h-3 w-3 shrink-0 rounded-full border border-white"
                       style={{ background: color, boxShadow: '0 0 0 1px rgba(0,0,0,0.15)' }}
                     />
-                  )}
-                  <span className="leading-tight">{label}</span>
-                </div>
-              ))}
+                    )}
+                    <span className="leading-tight">{label}</span>
+                  </div>
+                )
+              })}
             </div>
           </div>
         ))}

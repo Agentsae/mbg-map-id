@@ -230,6 +230,11 @@ export default function MapView({
       onMapReadyRef.current?.(map)
     }
 
+    // Hook debug/QA (DEV-only, di-tree-shake dari build produksi): ekspos
+    // instance peta ke global supaya harness browser bisa memeriksa
+    // getStyle().layers / isSourceLoaded tanpa jalur khusus. Bukan API produk.
+    if (import.meta.env.DEV && typeof window !== 'undefined') window.__gtiMap = map
+
     return () => {
       cancelled = true
       clearTimeout(loadFallback)

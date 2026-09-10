@@ -32,10 +32,11 @@ import { fetchAllRows } from './lib/fetchAllRows'
 import {
   CHOROPLETH_COLORS,
   CLASS_COUNT,
-  classBreaks,
   computeMinMax,
   fmtBound,
+  quantileBreaks,
   stepFillColorExpr,
+  toCentroidPointFC,
   toPolygonFeatureCollection,
 } from './lib/choropleth'
 import { markerIconSvg, legendIconSvg } from './lib/mapIcons'
@@ -1117,53 +1118,128 @@ export default function App() {
     }
   }, [sorotWilayah])
 
-  // Overlai analitik — choropleth full-map grid 300 m (kepadatan_penduduk atau
-  // skor_tdi), dinyalakan dari panel Layer. Data grid mentah di-cache di
-  // `gridChoro` (lazy fetch). Kelas diskret + palet YlGnBu colorblind-safe dari
-  // lib/choropleth.js — SAMA dengan tab Analisis Spasial. Tidak ada skor
-  // dihitung ulang di sini; hanya klasifikasi tampilan.
+  // Overlai analitik full-map dari grid 300 m (grid_analisis), dinyalakan dari
+  // panel Layer. Data grid mentah di-cache di `gridChoro` (lazy fetch). Tidak
+  // ada skor dihitung ulang di sini; hanya klasifikasi/visualisasi tampilan.
+  //   * 'kepadatan' -> CHOROPLETH fill poligon sel, kelas KUANTIL (tiap kelas
+  //     ≈ jumlah sel setara — equal-interval linear membuat peta nyaris polos
+  //     karena mayoritas sel numpuk di kelas terendah). Palet YlGnBu.
+  //   * 'tdi' -> HEATMAP dari titik pusat sel, ramp Viridis (CLAUDE.md Bab 10.3
+  //     menyebut Viridis/ColorBrewer eksplisit). Permukaan interpolasi, bukan
+  //     batas sel.
   const choroActive = analyticOverlay !== 'none'
-  const choroMetricKey = analyticOverlay === 'tdi' ? 'tdi' : 'kepadatan'
   const choroDerived = useMemo(() => {
     if (!gridChoro?.length) return null
-    const range = computeMinMax(gridChoro.map((c) => c[choroMetricKey]))
-    const breaks = classBreaks(range, CLASS_COUNT)
-    const fc = toPolygonFeatureCollection(gridChoro, (c) => c[choroMetricKey])
-    return { range, breaks, fc }
-  }, [gridChoro, choroMetricKey])
+    if (analyticOverlay === 'tdi') {
+      return { kind: 'heatmap', fc: toCentroidPointFC(gridChoro, 'tdi') }
+    }
+    const values = gridChoro.map((c) => c.kepadatan)
+    const range = computeMinMax(values)
+    const breaks = quantileBreaks(values, CLASS_COUNT)
+    const fc = toPolygonFeatureCollection(gridChoro, (c) => c.kepadatan)
+    return { kind: 'choropleth', range, breaks, fc }
+  }, [gridChoro, analyticOverlay])
 
-  // Baris legenda kelas choropleth — label memuat nomor kelas + rentang angka
-  // (pembeda non-warna wajib, CLAUDE.md Bab 10.3).
-  const choroLegendItems = useMemo(() => {
-    if (!choroActive || !choroDerived) return []
+  // Grup legenda untuk overlai aktif — note (cara baca) + baris item.
+  // choropleth: 5 baris `swatch` (Kelas N · a – b, format angka Indonesia).
+  // heatmap: 1 baris `gradient` ramp Viridis berlabel "TDI rendah/tinggi".
+  const VIRIDIS_LEGEND_GRADIENT =
+    'linear-gradient(90deg, #440154, #3b528b, #21908d, #5dc963, #fde725)'
+  const choroLegendGroup = useMemo(() => {
+    if (!choroActive || !choroDerived) return null
+    if (choroDerived.kind === 'heatmap') {
+      return {
+        title: 'Overlai: Transit Desert Index (heatmap)',
+        note:
+          "Konsentrasi kebutuhan transit yang belum terlayani. Makin terang = skor TDI makin tinggi (wilayah makin 'transit desert'). Permukaan interpolasi dari titik pusat sel 300 m, bukan batas sel.",
+        items: [
+          {
+            shape: 'gradient',
+            gradient: VIRIDIS_LEGEND_GRADIENT,
+            labelLeft: 'TDI rendah',
+            labelRight: 'TDI tinggi',
+          },
+        ],
+      }
+    }
     const bounds = [choroDerived.range[0], ...choroDerived.breaks, choroDerived.range[1]]
-    return CHOROPLETH_COLORS.map((color, i) => ({
-      color,
-      shape: 'swatch',
-      label: `Kelas ${i + 1} · ${fmtBound(bounds[i])} – ${fmtBound(bounds[i + 1])}`,
-    }))
+    return {
+      title: 'Overlai: Kepadatan penduduk',
+      note:
+        'Jiwa per sel grid 300 m (dasymetric). Makin gelap makin padat. Kelas dibagi kuantil — tiap kelas ≈ jumlah sel setara.',
+      items: CHOROPLETH_COLORS.map((color, i) => ({
+        color,
+        shape: 'swatch',
+        label: `Kelas ${i + 1} · ${fmtBound(bounds[i])} – ${fmtBound(bounds[i + 1])}`,
+      })),
+    }
   }, [choroActive, choroDerived])
 
   // Layer titik/garis konteks. `visible` tiap layer disetel dari panel Layer
   // (layerVis) — MapView menerapkannya lewat setLayoutProperty('visibility').
   const mapLayers = [
-    // Overlai choropleth PALING AWAL (digambar paling BAWAH) supaya rute,
-    // marker, dan batas tetap di atas. Tanpa popupHtml -> klik peta tembus ke
-    // handleMapClick (RPC get_cai_breakdown) seperti biasa.
+    // Overlai analitik PALING AWAL (digambar paling BAWAH) supaya rute, marker,
+    // dan batas tetap di atas. Tanpa popupHtml -> klik peta tembus ke
+    // handleMapClick (RPC get_cai_breakdown) seperti biasa. Dua id berbeda
+    // (fill vs heatmap) supaya sinkronisasi layer MapView membongkar-pasang
+    // dengan bersih saat user ganti jenis overlai (bukan setPaintProperty
+    // silang-tipe).
     ...(choroActive && choroDerived
-      ? [
-          {
-            id: 'overlay-choropleth',
-            type: 'fill',
-            data: choroDerived.fc,
-            paint: {
-              'fill-color': stepFillColorExpr(choroDerived.breaks),
-              'fill-opacity': 0.55,
-              'fill-outline-color': 'rgba(255,255,255,0.4)',
+      ? choroDerived.kind === 'heatmap'
+        ? [
+            {
+              id: 'overlay-tdi-heatmap',
+              type: 'heatmap',
+              data: choroDerived.fc,
+              paint: {
+                // Grid 300 m = titik BERJARAK SERAGAM, jadi "kepadatan titik"
+                // konstan; yang harus terbaca adalah VARIASI skor_tdi. Karena
+                // itu weight menekan nilai rendah (kurva cekung) supaya sel
+                // ber-TDI tinggi yang menonjol, radius dijaga < jarak antar-sel
+                // (~38 px @ z12) supaya kernel tidak saling tumpuk sampai
+                // saturasi rata, dan intensity ditahan rendah. (Nilai lebih
+                // konservatif dari draf awal 18/40 + intensity 1/3 yang membuat
+                // seluruh kota jadi blok kuning maksimum.)
+                'heatmap-weight': [
+                  'interpolate', ['linear'], ['get', 'skor_tdi'],
+                  0, 0,
+                  0.4, 0.1,
+                  0.65, 0.4,
+                  1, 1,
+                ],
+                'heatmap-intensity': ['interpolate', ['linear'], ['zoom'], 10, 0.4, 14, 1],
+                // Radius ~1x jarak antar-sel supaya kernel berbaur mulus (bukan
+                // titik-titik kotak), tapi intensity rendah supaya tidak saturasi.
+                'heatmap-radius': ['interpolate', ['linear'], ['zoom'], 10, 22, 14, 46],
+                'heatmap-color': [
+                  'interpolate',
+                  ['linear'],
+                  ['heatmap-density'],
+                  0, 'rgba(68,1,84,0)',
+                  0.12, '#440154',
+                  0.35, '#3b528b',
+                  0.55, '#21908d',
+                  0.75, '#5dc963',
+                  1, '#fde725',
+                ],
+                'heatmap-opacity': 0.7,
+              },
+              visible: choroActive,
             },
-            visible: choroActive,
-          },
-        ]
+          ]
+        : [
+            {
+              id: 'overlay-choropleth',
+              type: 'fill',
+              data: choroDerived.fc,
+              paint: {
+                'fill-color': stepFillColorExpr(choroDerived.breaks),
+                'fill-opacity': 0.7,
+                'fill-outline-color': 'rgba(255,255,255,0.4)',
+              },
+              visible: choroActive,
+            },
+          ]
       : []),
     {
       id: 'biskita-koridor-osm',
@@ -1438,17 +1514,10 @@ export default function App() {
                         }],
                       }]
                     : []),
-                  // Grup overlai analitik — hanya saat choropleth aktif. Kelas
-                  // diskret + nomor + rentang angka (colorblind-safe).
-                  ...(choroLegendItems.length
-                    ? [{
-                        title:
-                          analyticOverlay === 'tdi'
-                            ? 'Overlai: Transit Desert Index (0–1)'
-                            : 'Overlai: Kepadatan penduduk (jiwa/sel 300 m)',
-                        items: choroLegendItems,
-                      }]
-                    : []),
+                  // Grup overlai analitik — hanya saat overlai aktif. Kepadatan:
+                  // kelas kuantil (swatch). TDI: bilah gradien Viridis (heatmap).
+                  // note = cara baca. Colorblind-safe (CLAUDE.md Bab 10.3).
+                  ...(choroLegendGroup ? [choroLegendGroup] : []),
                   {
                     title: 'Wilayah & area studi',
                     items: [
