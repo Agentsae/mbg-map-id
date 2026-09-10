@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   LayoutDashboard,
   Map as MapIcon,
@@ -16,6 +16,7 @@ import MapView from './components/Map/MapView'
 import SearchBar from './components/Search/SearchBar'
 import CaiScorePanel from './components/Map/CaiScorePanel'
 import MapLegend from './components/Map/MapLegend'
+import LayerControl from './components/Map/LayerControl'
 import AIPanel from './components/AIPanel/AIPanel'
 import AnalisisSpasial from './components/AnalisisSpasial/AnalisisSpasial'
 import SimulationPanel from './components/SimulationMode/SimulationPanel'
@@ -25,8 +26,19 @@ import DataLaporan from './components/DataLaporan/DataLaporan'
 import LoginPage from './components/Auth/LoginPage'
 import Pengaturan from './components/Pengaturan/Pengaturan'
 import { supabase, isConfigured } from './lib/supabaseClient'
-import { extractLatLon, extractLineStringCoords, haversineMeters } from './lib/geo'
+import { extractLatLon, extractLineStringCoords, extractPolygonRings, haversineMeters } from './lib/geo'
 import { isDummyHalte } from './lib/halteEksisting'
+import { fetchAllRows } from './lib/fetchAllRows'
+import {
+  CHOROPLETH_COLORS,
+  CLASS_COUNT,
+  classBreaks,
+  computeMinMax,
+  fmtBound,
+  stepFillColorExpr,
+  toPolygonFeatureCollection,
+} from './lib/choropleth'
+import { markerIconSvg, legendIconSvg } from './lib/mapIcons'
 
 // Batas area studi (outline Kota Bekasi) — aset STATIS yang di-bundle saat
 // build, hasil etl/build_bekasi_boundary_geojson.py (dissolve 56 kelurahan
@@ -264,6 +276,43 @@ const DEMO_RUTE_KRL_GEOJSON = {
 }
 const DEMO_RUTE_TRANSIT_DISCLAIMER =
   'Data contoh — belum tersambung ke tabel rute_transit_eksisting.'
+
+// Grid contoh untuk OVERLAI ANALITIK (choropleth kepadatan / TDI) saat Supabase
+// belum tersambung. 36 sel kotak membagi bbox kasar Kota Bekasi — BUKAN grid
+// 300 m riil grid_analisis, hanya supaya overlai tetap bisa didemokan. Nilai
+// deterministik (bukan Math.random) supaya stabil antar reload.
+const DEMO_CHORO_BBOX = { minLat: -6.35, maxLat: -6.15, minLon: 106.95, maxLon: 107.12 }
+function buildDemoChoroCells() {
+  const n = 6
+  const lonStep = (DEMO_CHORO_BBOX.maxLon - DEMO_CHORO_BBOX.minLon) / n
+  const latStep = (DEMO_CHORO_BBOX.maxLat - DEMO_CHORO_BBOX.minLat) / n
+  const cells = []
+  for (let r = 0; r < n; r++) {
+    for (let c = 0; c < n; c++) {
+      const seed = r * n + c + 1
+      const rnd = (k) => {
+        const x = Math.sin(seed * k) * 43758.5453
+        return x - Math.floor(x)
+      }
+      const minLon = DEMO_CHORO_BBOX.minLon + c * lonStep
+      const minLat = DEMO_CHORO_BBOX.minLat + r * latStep
+      const maxLon = minLon + lonStep
+      const maxLat = minLat + latStep
+      cells.push({
+        ring: [
+          [minLon, minLat],
+          [maxLon, minLat],
+          [maxLon, maxLat],
+          [minLon, maxLat],
+          [minLon, minLat],
+        ],
+        kepadatan: Math.round(rnd(12.9898) * 16000 + 1500),
+        tdi: Number(rnd(3.7).toFixed(2)),
+      })
+    }
+  }
+  return cells
+}
 
 // Warna marker titik_kandidat = TITIK SURVEI LAPANGAN (Form Traffic Counting).
 // SATU warna sejak 2026-09-07: skema 2-warna lama membedakan "4 kriteria CAI
@@ -526,6 +575,68 @@ export default function App() {
   // (lazy, via RPC get_admin_geometry saat baris Wilayah dipilih) dan
   // dikosongkan saat hasil titik/garis dipilih atau input dibersihkan.
   const [sorotWilayah, setSorotWilayah] = useState(null)
+
+  // --- Panel Layer (tab Peta Interaktif) ---
+  // Visibilitas layer titik/garis konteks — semua default ON. Key dipetakan ke
+  // marker group / layer garis di mapLayers di bawah. candidateMarkers (titik
+  // survei, jangkar CAI) sengaja TIDAK di daftar ini — selalu tampil.
+  const [layerVis, setLayerVis] = useState({
+    usulanModel: true,
+    halte: true,
+    stasiun: true,
+    koridorBiskita: true,
+    krl: true,
+    lrt: true,
+    batasKota: true,
+  })
+  // Overlai analitik choropleth full-map: 'none' | 'kepadatan' | 'tdi'.
+  const [analyticOverlay, setAnalyticOverlay] = useState('none')
+  // Cache sel grid_analisis untuk overlai — di-fetch LAZY (sekali, saat overlai
+  // pertama kali dinyalakan) lalu ditahan; toggle off/on tidak fetch ulang.
+  // Bentuk: array { ring:[[lon,lat]...], kepadatan:number, tdi:number } | null.
+  const [gridChoro, setGridChoro] = useState(null)
+  const [gridChoroLoading, setGridChoroLoading] = useState(false)
+  // Penjaga supaya fetch grid_analisis untuk overlai HANYA jalan sekali —
+  // toggle overlai off lalu on lagi tidak memicu fetch ulang.
+  const gridChoroFetchStartedRef = useRef(false)
+
+  useEffect(() => {
+    if (analyticOverlay === 'none' || gridChoroFetchStartedRef.current) return
+    gridChoroFetchStartedRef.current = true
+    let cancelled = false
+
+    ;(async () => {
+      setGridChoroLoading(true)
+      try {
+        if (!isConfigured) {
+          if (!cancelled) setGridChoro(buildDemoChoroCells())
+          return
+        }
+        // 2.607 baris grid_analisis > cap 1000/req PostgREST -> fetchAllRows.
+        const { data, error } = await fetchAllRows(() =>
+          supabase.from('grid_analisis').select('id, geom, kepadatan_penduduk, skor_tdi'),
+        )
+        if (error) throw error
+        const cells = (data ?? [])
+          .map((row) => {
+            const ring0 = extractPolygonRings(row.geom)?.[0]
+            if (!ring0) return null
+            return { ring: ring0, kepadatan: row.kepadatan_penduduk, tdi: row.skor_tdi }
+          })
+          .filter(Boolean)
+        if (!cancelled) setGridChoro(cells.length ? cells : buildDemoChoroCells())
+      } catch (err) {
+        console.error('Gagal memuat grid_analisis untuk overlai analitik:', err)
+        if (!cancelled) setGridChoro(buildDemoChoroCells())
+      } finally {
+        if (!cancelled) setGridChoroLoading(false)
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [analyticOverlay])
 
   // --- Simulasi What-If ---
   const [simulationActive, setSimulationActive] = useState(false)
@@ -853,6 +964,7 @@ export default function App() {
         lat: h.lat,
         lon: h.lon,
         color: HALTE_TERSURVEI_MARKER_COLOR,
+        icon: markerIconSvg('bus'),
         popupHtml: buildHaltePopupHtml(h),
       })),
     [haltePoints.points],
@@ -867,13 +979,14 @@ export default function App() {
         .map((f) => {
           const [lon, lat] = f.geometry?.coordinates || []
           if (lat == null || lon == null) return null
+          const isLrt = f.properties?.moda === 'LRT'
           return {
             lat,
             lon,
-            color:
-              f.properties?.moda === 'LRT'
-                ? STASIUN_LRT_MARKER_COLOR
-                : STASIUN_KRL_MARKER_COLOR,
+            color: isLrt ? STASIUN_LRT_MARKER_COLOR : STASIUN_KRL_MARKER_COLOR,
+            // Glyph beda per moda: trem (LRT) vs kereta (KRL) — pembeda BENTUK
+            // di samping warna (colorblind-safe, CLAUDE.md Bab 10.3).
+            icon: markerIconSvg(isLrt ? 'tram' : 'train'),
             popupHtml: buildStasiunPopupHtml(f.properties),
           }
         })
@@ -889,6 +1002,10 @@ export default function App() {
         lat: u.lat,
         lon: u.lon,
         color: USULAN_MODEL_MARKER_COLOR,
+        // Pin + tepi PUTUS-PUTUS: usulan model, BELUM disurvei lapangan —
+        // sengaja tampil "belum riil" vs badge solid halte tersurvei.
+        icon: markerIconSvg('pin'),
+        iconStyle: 'dashed',
         popupHtml: buildUsulanModelPopupHtml(u),
       })),
     [usulanModel],
@@ -896,10 +1013,24 @@ export default function App() {
 
   // clickMarker TIDAK digabung di sini — dikirim sebagai prop terpisah ke
   // MapView supaya perubahannya tiap klik tidak ikut membongkar marker persisten.
-  const markers = useMemo(
-    () => [...stationMarkers, ...halteMarkers, ...usulanModelMarkers, ...candidateMarkers],
-    [stationMarkers, halteMarkers, usulanModelMarkers, candidateMarkers],
-  )
+  // Grup marker disaring oleh panel Layer (layerVis). candidateMarkers (titik
+  // survei, jangkar CAI) SELALU ikut — tidak ada di daftar toggle.
+  const markers = useMemo(() => {
+    const out = []
+    if (layerVis.stasiun) out.push(...stationMarkers)
+    if (layerVis.halte) out.push(...halteMarkers)
+    if (layerVis.usulanModel) out.push(...usulanModelMarkers)
+    out.push(...candidateMarkers)
+    return out
+  }, [
+    stationMarkers,
+    halteMarkers,
+    usulanModelMarkers,
+    candidateMarkers,
+    layerVis.stasiun,
+    layerVis.halte,
+    layerVis.usulanModel,
+  ])
 
   // Layer garis rute transit eksisting — 2 layer terpisah dengan visual jelas
   // berbeda (lihat konstanta warna RUTE_BISKITA_COLOR/RUTE_KRL_COLOR di atas).
@@ -915,6 +1046,7 @@ export default function App() {
       data: ruteTransit.biskitaGeoJSON,
       paint: { 'line-color': RUTE_BISKITA_COLOR, 'line-width': 5, 'line-opacity': 0.9 },
       popupHtml: ruteTransit.biskitaPopupHtml,
+      visible: layerVis.koridorBiskita,
     },
     {
       id: 'rute-krl-eksisting',
@@ -927,6 +1059,7 @@ export default function App() {
         'line-dasharray': [2, 1.5],
       },
       popupHtml: ruteTransit.krlPopupHtml,
+      visible: layerVis.krl,
     },
   ]
 
@@ -984,8 +1117,54 @@ export default function App() {
     }
   }, [sorotWilayah])
 
-  // Semua display-only, selalu tampil (konteks dasar), tidak perlu toggle.
+  // Overlai analitik — choropleth full-map grid 300 m (kepadatan_penduduk atau
+  // skor_tdi), dinyalakan dari panel Layer. Data grid mentah di-cache di
+  // `gridChoro` (lazy fetch). Kelas diskret + palet YlGnBu colorblind-safe dari
+  // lib/choropleth.js — SAMA dengan tab Analisis Spasial. Tidak ada skor
+  // dihitung ulang di sini; hanya klasifikasi tampilan.
+  const choroActive = analyticOverlay !== 'none'
+  const choroMetricKey = analyticOverlay === 'tdi' ? 'tdi' : 'kepadatan'
+  const choroDerived = useMemo(() => {
+    if (!gridChoro?.length) return null
+    const range = computeMinMax(gridChoro.map((c) => c[choroMetricKey]))
+    const breaks = classBreaks(range, CLASS_COUNT)
+    const fc = toPolygonFeatureCollection(gridChoro, (c) => c[choroMetricKey])
+    return { range, breaks, fc }
+  }, [gridChoro, choroMetricKey])
+
+  // Baris legenda kelas choropleth — label memuat nomor kelas + rentang angka
+  // (pembeda non-warna wajib, CLAUDE.md Bab 10.3).
+  const choroLegendItems = useMemo(() => {
+    if (!choroActive || !choroDerived) return []
+    const bounds = [choroDerived.range[0], ...choroDerived.breaks, choroDerived.range[1]]
+    return CHOROPLETH_COLORS.map((color, i) => ({
+      color,
+      shape: 'swatch',
+      label: `Kelas ${i + 1} · ${fmtBound(bounds[i])} – ${fmtBound(bounds[i + 1])}`,
+    }))
+  }, [choroActive, choroDerived])
+
+  // Layer titik/garis konteks. `visible` tiap layer disetel dari panel Layer
+  // (layerVis) — MapView menerapkannya lewat setLayoutProperty('visibility').
   const mapLayers = [
+    // Overlai choropleth PALING AWAL (digambar paling BAWAH) supaya rute,
+    // marker, dan batas tetap di atas. Tanpa popupHtml -> klik peta tembus ke
+    // handleMapClick (RPC get_cai_breakdown) seperti biasa.
+    ...(choroActive && choroDerived
+      ? [
+          {
+            id: 'overlay-choropleth',
+            type: 'fill',
+            data: choroDerived.fc,
+            paint: {
+              'fill-color': stepFillColorExpr(choroDerived.breaks),
+              'fill-opacity': 0.55,
+              'fill-outline-color': 'rgba(255,255,255,0.4)',
+            },
+            visible: choroActive,
+          },
+        ]
+      : []),
     {
       id: 'biskita-koridor-osm',
       type: 'line',
@@ -997,6 +1176,7 @@ export default function App() {
         'line-dasharray': [2, 1.2],
       },
       popupHtml: BISKITA_KORIDOR_OSM_POPUP_HTML,
+      visible: layerVis.koridorBiskita,
     },
     {
       // Jalur LRT Jabodebek — geometri rel ASLI dari OSM (bukan aproksimasi),
@@ -1008,6 +1188,7 @@ export default function App() {
       data: lrtJabodebekOsm,
       paint: { 'line-color': RUTE_LRT_COLOR, 'line-width': 3, 'line-opacity': 0.85 },
       popupHtml: LRT_POPUP_HTML,
+      visible: layerVis.lrt,
     },
     ...ruteLayers,
     {
@@ -1022,12 +1203,14 @@ export default function App() {
         'circle-opacity': 0.9,
       },
       popupHtml: BISKITA_HALTE_OSM_POPUP_HTML,
+      visible: layerVis.koridorBiskita,
     },
     {
       id: 'batas-kota-bekasi',
       type: 'line',
       data: bekasiBoundary,
       paint: { 'line-color': BATAS_KOTA_COLOR, 'line-width': 2.5, 'line-dasharray': [3, 2] },
+      visible: layerVis.batasKota,
     },
     // Sorotan wilayah terpilih dari pencarian — DITARUH PALING AKHIR supaya
     // digambar di atas semua layer lain (elemen belakang array = paling atas).
@@ -1255,6 +1438,17 @@ export default function App() {
                         }],
                       }]
                     : []),
+                  // Grup overlai analitik — hanya saat choropleth aktif. Kelas
+                  // diskret + nomor + rentang angka (colorblind-safe).
+                  ...(choroLegendItems.length
+                    ? [{
+                        title:
+                          analyticOverlay === 'tdi'
+                            ? 'Overlai: Transit Desert Index (0–1)'
+                            : 'Overlai: Kepadatan penduduk (jiwa/sel 300 m)',
+                        items: choroLegendItems,
+                      }]
+                    : []),
                   {
                     title: 'Wilayah & area studi',
                     items: [
@@ -1264,7 +1458,7 @@ export default function App() {
                   {
                     title: 'Transit tersurvei tim',
                     items: [
-                      { color: HALTE_TERSURVEI_MARKER_COLOR, shape: 'dot', label: 'Halte tersurvei' },
+                      { color: HALTE_TERSURVEI_MARKER_COLOR, icon: legendIconSvg('bus'), label: 'Halte tersurvei' },
                       { color: RUTE_BISKITA_COLOR, shape: 'line', lineStyle: 'solid', label: 'Koridor BisKita (tersurvei)' },
                     ],
                   },
@@ -1274,19 +1468,28 @@ export default function App() {
                       { color: RUTE_BISKITA_OSM_COLOR, shape: 'line', lineStyle: 'dashed', label: 'Koridor BisKita Trans Patriot (OSM)' },
                       { color: HALTE_BISKITA_OSM_COLOR, shape: 'dot', label: 'Halte BisKita (OSM)' },
                       { color: RUTE_KRL_COLOR, shape: 'line', lineStyle: 'dashed', label: 'Jaringan KRL' },
-                      { color: STASIUN_KRL_MARKER_COLOR, shape: 'dot', label: 'Stasiun KRL' },
+                      { color: STASIUN_KRL_MARKER_COLOR, icon: legendIconSvg('train'), label: 'Stasiun KRL' },
                       { color: RUTE_LRT_COLOR, shape: 'line', lineStyle: 'solid', label: 'Jalur LRT Jabodebek (geometri OSM)' },
-                      { color: STASIUN_LRT_MARKER_COLOR, shape: 'dot', label: 'Stasiun LRT Jabodebek' },
+                      { color: STASIUN_LRT_MARKER_COLOR, icon: legendIconSvg('tram'), label: 'Stasiun LRT Jabodebek' },
                     ],
                   },
                   {
                     title: 'Titik analisis',
                     items: [
                       { color: CANDIDATE_MARKER_COLOR, shape: 'dot', label: 'Titik survei lapangan (Traffic Counting)' },
-                      { color: USULAN_MODEL_MARKER_COLOR, shape: 'dot', label: 'Usulan halte dari model spasial (belum disurvei)' },
+                      { color: USULAN_MODEL_MARKER_COLOR, icon: legendIconSvg('pin'), label: 'Usulan halte dari model spasial (belum disurvei)' },
                     ],
                   },
                 ]}
+              />
+            )}
+            {activeTab === 'peta' && (
+              <LayerControl
+                value={layerVis}
+                onChange={setLayerVis}
+                analyticOverlay={analyticOverlay}
+                onAnalyticOverlayChange={setAnalyticOverlay}
+                overlayLoading={gridChoroLoading}
               />
             )}
           </MapView>

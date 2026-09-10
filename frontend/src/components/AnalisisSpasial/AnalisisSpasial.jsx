@@ -6,6 +6,15 @@ import { supabase, isConfigured } from '../../lib/supabaseClient'
 import { fetchAllRows } from '../../lib/fetchAllRows'
 import { KECAMATAN_KOTA_BEKASI } from '../../lib/kecamatan'
 import {
+  CHOROPLETH_COLORS,
+  CLASS_COUNT,
+  classBreaks,
+  computeMinMax,
+  fmtBound,
+  stepFillColorExpr,
+  toPolygonFeatureCollection,
+} from '../../lib/choropleth'
+import {
   extractLatLon,
   extractPolygonRings,
   bboxFromRing,
@@ -52,29 +61,9 @@ import {
  */
 const SUMBER_BATAS_RESMI = 'BIG RBI 25K KUGI50 2022-12-31 (tanahair.indonesia.go.id)'
 
-// Palet choropleth: sequential colorblind-safe — ColorBrewer YlGnBu 5 kelas
-// (kuning muda → biru tua), dipakai untuk KEDUA layer (kepadatan & gap; hanya
-// satu tampil pada satu waktu lewat radio). Menggantikan skema lama hijau→merah
-// diverging (gap) & cream→merah (kepadatan) yang dilarang PRD Bab 10.3 / temuan
-// Coaching Clinic 4: skema merah–oranye–hijau tidak terbaca bagi ~8% pria dengan
-// color vision deficiency. Kelas dibuat DISKRET (ekspresi 'step', bukan gradient
-// kontinu) dan legenda menambahkan nomor kelas + label rentang angka sebagai
-// pembeda non-warna — tampilan tidak bergantung pada warna saja.
-const CHOROPLETH_COLORS = ['#ffffcc', '#a1dab4', '#41b6c4', '#2c7fb8', '#253494']
-const CLASS_COUNT = CHOROPLETH_COLORS.length
-
-// Ambang kelas equal-interval pada rentang [min, max] → CLASS_COUNT-1 nilai batas,
-// strictly ascending (computeMinMax menjamin max > min).
-function classBreaks([min, max], n) {
-  const span = (max - min) / n
-  return Array.from({ length: n - 1 }, (_, i) => min + span * (i + 1))
-}
-
-// Format batas kelas untuk legenda: angka besar (kepadatan) dibulatkan + pemisah
-// ribuan, angka kecil (skor 0–1) dua desimal.
-function fmtBound(v) {
-  return Math.abs(v) >= 100 ? Math.round(v).toLocaleString('id-ID') : v.toFixed(2)
-}
+// Palet + helper choropleth (CHOROPLETH_COLORS, classBreaks, computeMinMax,
+// toPolygonFeatureCollection, stepFillColorExpr, fmtBound) kini dari
+// lib/choropleth.js — dipakai bersama oleh overlai analitik di Peta Interaktif.
 
 // Perkiraan cakupan wilayah Kota Bekasi — dipakai untuk membangun grid & bbox
 // kecamatan CONTOH (dummy) saat Supabase belum terisi. Bukan batas administratif
@@ -194,26 +183,6 @@ function buildDemoHalte(kecamatanBBoxes) {
     nama: `Halte ${kecamatan} (contoh)`,
     kecamatan,
   }))
-}
-
-function computeMinMax(values) {
-  const nums = values.filter((v) => typeof v === 'number' && !Number.isNaN(v))
-  if (!nums.length) return [0, 1]
-  let min = Math.min(...nums)
-  let max = Math.max(...nums)
-  if (min === max) max = min + 1
-  return [min, max]
-}
-
-function toPolygonFeatureCollection(cells, valueFn) {
-  return {
-    type: 'FeatureCollection',
-    features: cells.map((c) => ({
-      type: 'Feature',
-      geometry: { type: 'Polygon', coordinates: [c.ring] },
-      properties: { value: valueFn(c) ?? 0 },
-    })),
-  }
 }
 
 export default function AnalisisSpasial() {
@@ -483,11 +452,7 @@ export default function AnalisisSpasial() {
   // 'interpolate' gradient kontinu supaya tiap kelas tampil sebagai blok warna
   // terpisah — lebih mudah dibedakan, termasuk bagi pengguna CVD).
   const activeBreaks = useMemo(() => classBreaks(activeRange, CLASS_COUNT), [activeRange])
-  const fillColorExpr = useMemo(() => {
-    const expr = ['step', ['get', 'value'], CHOROPLETH_COLORS[0]]
-    activeBreaks.forEach((b, i) => expr.push(b, CHOROPLETH_COLORS[i + 1]))
-    return expr
-  }, [activeBreaks])
+  const fillColorExpr = useMemo(() => stepFillColorExpr(activeBreaks), [activeBreaks])
   const legendClasses = useMemo(() => {
     const bounds = [activeRange[0], ...activeBreaks, activeRange[1]]
     return CHOROPLETH_COLORS.map((color, i) => ({

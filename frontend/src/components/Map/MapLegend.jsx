@@ -13,11 +13,17 @@ import { ChevronDown, ChevronUp, Layers } from 'lucide-react'
  *
  * Props:
  * - groups: Array<{ title?: string, items: LegendItem[] }>
- *   LegendItem = { color, label, shape?: 'dot'|'line', lineStyle?: 'solid'|'dashed' }
+ *   LegendItem = { color, label, shape?: 'dot'|'line'|'swatch', lineStyle?: 'solid'|'dashed', icon?: string }
+ *   - icon (SVG string) — kalau ada, swatch = badge ikon kecil berwarna
+ *     `color` (glyph moda transit: bus/kereta/trem/pin) supaya legenda cocok
+ *     dengan marker ikon di peta. Didahulukan dari `shape`.
  *   - shape 'dot' (default) — marker titik (halte, usulan lokasi, dst).
  *   - shape 'line' — layer garis (rute BisKita/KRL), dengan lineStyle
  *     'solid'/'dashed' supaya legenda ikut mencerminkan beda BENTUK garis
  *     di peta, bukan cuma beda warna (syarat colorblind-safe CLAUDE.md).
+ *   - shape 'swatch' — blok warna persegi, dipakai untuk kelas choropleth
+ *     (overlai analitik). Label sudah memuat nomor kelas + rentang angka
+ *     sebagai pembeda non-warna.
  */
 export default function MapLegend({ groups }) {
   const [expanded, setExpanded] = useState(true)
@@ -60,9 +66,20 @@ export default function MapLegend({ groups }) {
               </p>
             )}
             <div className="space-y-1.5">
-              {group.items.map(({ color, label, shape = 'dot', lineStyle = 'solid' }) => (
+              {group.items.map(({ color, label, shape = 'dot', lineStyle = 'solid', icon }) => (
                 <div key={label} className="flex items-center gap-2">
-                  {shape === 'line' ? (
+                  {icon ? (
+                    <span
+                      className="inline-flex h-4 w-4 shrink-0 items-center justify-center overflow-hidden rounded-[4px] border bg-white"
+                      style={{ color, borderColor: color }}
+                      dangerouslySetInnerHTML={{ __html: icon }}
+                    />
+                  ) : shape === 'swatch' ? (
+                    <span
+                      className="inline-block h-3 w-4 shrink-0 rounded-sm border border-slate-300"
+                      style={{ background: color }}
+                    />
+                  ) : shape === 'line' ? (
                     <span
                       className="inline-block h-0 w-4 shrink-0"
                       style={{

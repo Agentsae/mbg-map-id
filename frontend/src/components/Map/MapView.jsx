@@ -296,12 +296,32 @@ export default function MapView({
   const createMarker = (map, m) => {
     const el = document.createElement('div')
     const color = m.color || '#1B659D'
-    el.style.width = '14px'
-    el.style.height = '14px'
-    el.style.borderRadius = '50%'
-    el.style.border = '2px solid white'
-    el.style.boxShadow = '0 1px 3px rgba(0,0,0,0.4)'
-    el.style.background = color
+    if (m.icon) {
+      // Badge ikon ~24px: latar putih, tepi 2px warna marker, glyph SVG di
+      // tengah mewarisi warna lewat currentColor (el.style.color). Dipakai untuk
+      // halte/stasiun/usulan supaya moda transit terbedakan lewat BENTUK ikon,
+      // bukan warna saja (syarat colorblind-safe CLAUDE.md Bab 10.3). Tepi
+      // 'dashed' (m.iconStyle) menandai layer yang BELUM riil/tersurvei
+      // (usulan halte model).
+      el.style.width = '24px'
+      el.style.height = '24px'
+      el.style.display = 'flex'
+      el.style.alignItems = 'center'
+      el.style.justifyContent = 'center'
+      el.style.borderRadius = '7px'
+      el.style.background = '#ffffff'
+      el.style.border = `2px ${m.iconStyle === 'dashed' ? 'dashed' : 'solid'} ${color}`
+      el.style.boxShadow = '0 1px 3px rgba(0,0,0,0.35)'
+      el.style.color = color
+      el.innerHTML = m.icon
+    } else {
+      el.style.width = '14px'
+      el.style.height = '14px'
+      el.style.borderRadius = '50%'
+      el.style.border = '2px solid white'
+      el.style.boxShadow = '0 1px 3px rgba(0,0,0,0.4)'
+      el.style.background = color
+    }
     if (m.title) el.title = m.title
     // Marker transient (lokasi yang baru diklik) memakai cincin denyut —
     // ::after di .gti-marker-pulse mengambil warna dari `color` di bawah.
