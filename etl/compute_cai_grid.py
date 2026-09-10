@@ -323,14 +323,49 @@ def print_summary(out: pd.DataFrame, meta: dict):
     print(out[_SAMPLE_COLS].head(5).to_string(index=False))
 
 
-def upload_cai_grid(client, out: pd.DataFrame, chunk: int = 500):
-    """Upsert batched kolom cai_* di grid_analisis by id (pola
-    rerun_dasymetric_grid.py: upsert on_conflict='id', hanya kolom target)."""
+def upload_cai_grid(client, out: pd.DataFrame, chunk: int = 500, resume: bool = True):
+    """UPDATE (bukan upsert) kolom cai_* di grid_analisis, per baris by id.
+
+    CATATAN: grid_analisis.id adalah `generated always as identity` — PostgREST
+    MENOLAK upsert yang menyertakan `id` ('cannot insert a non-DEFAULT value
+    into column "id"'). Semua 2607 sel sudah ada, jadi ini murni UPDATE. Pola
+    identik dg rerun_dasymetric_grid.upload_kepadatan_only(): `.update(payload)
+    .eq('id', ...)` per baris (2607 request; parameter `chunk` hanya dipakai
+    untuk kadensi progress-print).
+
+    resume=True (default): lewati sel yang `cai_dihitung_pada` sudah terisi,
+    supaya run yang ke-kill di tengah (mis. OOM) tinggal dijalankan ulang dan
+    lanjut dari sisa — bukan mulai dari 0. Jalankan ulang sampai 'sisa: 0'."""
     now_iso = datetime.now(timezone.utc).isoformat()
-    records = []
-    for _, r in out.iterrows():
-        records.append({
-            "id": int(r["id"]),
+    done_ids = set()
+    if resume:
+        got = 0
+        page = 1000
+        start = 0
+        while True:
+            res = (
+                client.table("grid_analisis")
+                .select("id")
+                .not_.is_("cai_dihitung_pada", "null")
+                .range(start, start + page - 1)
+                .execute()
+            )
+            batch = res.data or []
+            done_ids.update(int(x["id"]) for x in batch)
+            got += len(batch)
+            if len(batch) < page:
+                break
+            start += page
+        if done_ids:
+            print(f"  resume: {len(done_ids)} sel sudah terisi cai_* -> dilewati.")
+    pending = out[~out["id"].astype(int).isin(done_ids)]
+    total = len(pending)
+    if total == 0:
+        print("[UPLOAD] tidak ada sisa — semua sel sudah terisi cai_*.")
+        return
+    print(f"  akan meng-update {total} sel (sisa).")
+    for i, (_, r) in enumerate(pending.iterrows(), start=1):
+        payload = {
             "cai_jarak_fasilitas_m": _num_or_none(r["cai_jarak_fasilitas_m"], 2),
             "cai_volume_penumpang": _num_or_none(r["cai_volume_penumpang"], 2),
             "cai_skor_survei": _num_or_none(r["cai_skor_survei"], 4),
@@ -345,13 +380,10 @@ def upload_cai_grid(client, out: pd.DataFrame, chunk: int = 500):
             "cai_bobot_survei": _num_or_none(r["cai_bobot_survei"], 4),
             "cai_skor": _num_or_none(r["cai_skor"], 4),
             "cai_dihitung_pada": now_iso,
-        })
-    total = 0
-    for i in range(0, len(records), chunk):
-        part = records[i:i + chunk]
-        client.table("grid_analisis").upsert(part, on_conflict="id").execute()
-        total += len(part)
-        print(f"  upsert {total}/{len(records)}")
+        }
+        client.table("grid_analisis").update(payload).eq("id", int(r["id"])).execute()
+        if i % chunk == 0 or i == total:
+            print(f"  update {i}/{total}")
     print(f"[UPLOAD] {total} baris grid_analisis diperbarui kolom cai_* (cai_dihitung_pada={now_iso}).")
 
 
@@ -378,6 +410,19 @@ def run_live(args):
     print_summary(out, meta)
 
     if args.upload:
+        # Simpan hasil ke CSV dulu (recovery: kalau upload ke-kill, jalankan
+        # ulang `--upload` — resume=True lanjut dari sisa; CSV bukan syarat,
+        # cuma jejak). Lalu bebaskan GeoDataFrame besar sebelum loop 2607
+        # request supaya jejak memori kecil (mesin sempat OOM-kill run ini).
+        import gc
+        csv_path = os.path.join(os.path.dirname(__file__), "data", "_cai_grid_computed.csv")
+        try:
+            out.to_csv(csv_path, index=False)
+            print(f"\n[JEJAK] hasil komputasi disimpan: {csv_path}")
+        except OSError as e:
+            print(f"[JEJAK] gagal simpan CSV ({e}) — lanjut upload langsung.")
+        del grid, poi, halte, survei
+        gc.collect()
         print("\n=== Upload ke grid_analisis ===")
         upload_cai_grid(client, out)
     else:
