@@ -317,11 +317,25 @@ export default function AnalisisSpasial({
           Jaringan Transit Eksisting (halte tersurvei)
         </label>
 
+        {/* Perbaikan 2026-09-13 (Sam melaporkan nama kecamatan terpilih tidak
+            cukup mencolok): teks 11px abu-abu diganti badge/chip supaya jadi
+            elemen yang menonjol, bukan mudah terlewat. `yellow-600` dipakai
+            sengaja — itu PERSIS hex SOROT_WILAYAH_COLOR ('#CA8A04', lihat
+            lib/mapColors.js) yang dipakai untuk sorotan batas kecamatan di
+            peta utama, jadi badge di panel & sorotan di peta terasa satu
+            indikator visual yang sama. Dipakai lewat kelas Tailwind bawaan
+            (bukan inline style/hex baru) supaya tetap konsisten dengan
+            sistem desain file ini — CATATAN: kalau SOROT_WILAYAH_COLOR di
+            lib/mapColors.js diganti di masa depan, kelas yellow-* di sini
+            perlu disesuaikan manual (tidak otomatis ikut). */}
         {sorotWilayah?.level === 'kecamatan' && (
-          <p className="text-[11px] text-slate-500">
-            Kecamatan tersorot di peta:{' '}
-            <span className="font-medium text-slate-700">{sorotWilayah.nama}</span>
-          </p>
+          <div className="flex items-center gap-1.5 rounded-md border border-yellow-300 bg-yellow-50 px-2.5 py-1.5">
+            <MapPin size={14} className="text-yellow-600 shrink-0" />
+            <p className="text-xs text-slate-600 leading-snug">
+              Kecamatan tersorot di peta:{' '}
+              <span className="font-semibold text-yellow-800">{sorotWilayah.nama}</span>
+            </p>
+          </div>
         )}
       </div>
 
