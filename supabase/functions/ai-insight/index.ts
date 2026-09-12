@@ -689,6 +689,17 @@ TINGGI = kelurahan makin TERTINGGAL/DIRUGIKAN. "ranking": 1 = skor_ketimpangan p
     //    (narasi_source:"template"). Jadi frontend hanya perlu menangani delta+done,
     //    plus error sebagai kasus "ganti teks".
     //
+    //    Kasus lain yang JUGA jatuh ke jalur template di atas (1 delta besar +
+    //    `done` narasi_source:"template", BUKAN `event: error`) meski beberapa
+    //    delta AI sempat terkirim lebih dulu: stream Claude selesai NORMAL
+    //    (bukan putus) tapi `stop_reason === "max_tokens"` — narasi asli
+    //    terpotong sebelum kalimat selesai, jadi seluruh teks yang terkumpul
+    //    dibuang dan diganti template LENGKAP. Frontend tidak perlu kode baru:
+    //    `done.narasi` selalu MENIMPA penuh teks yang sempat ter-stream (lihat
+    //    `applyTerminal` di AIPanel.jsx yang meng-assign `text: data.narasi`,
+    //    bukan menyambungnya ke delta sebelumnya), jadi delta parsial sebelum
+    //    `done` ini otomatis tidak pernah terlihat final oleh user.
+    //
     //  Contoh mentah (curl -N):
     //    event: delta
     //    data: {"text":"Kelurahan Padurenan menempati peringkat 1 "}
@@ -869,6 +880,28 @@ TINGGI = kelurahan makin TERTINGGAL/DIRUGIKAN. "ranking": 1 = skor_ketimpangan p
           emitTemplate(
             "Layanan AI tidak mengembalikan teks — fallback ke template deterministik. " +
               "Angka & ranking tetap akurat."
+          );
+          return;
+        }
+
+        // Claude berhenti karena mencapai batas `max_tokens` SEBELUM narasi
+        // selesai -> `full` yang sudah terkumpul adalah kalimat terpotong,
+        // paling berbahaya kalau kejadian di tahap Action (angka "+N jiwa"
+        // ikut hilang/terpotong — lihat komentar max_tokens di atas). Jangan
+        // pernah kirim narasi sebagian ke user: buang `full`, fallback ke
+        // template LENGKAP lewat jalur done/narasi_source:"template" yang
+        // sama seperti cabang deltaTerkirim === 0 di atas (bukan `event:
+        // error` — lihat KONTRAK SSE: error dipakai utk stream yang PUTUS,
+        // bukan yang selesai normal tapi kepotong batas token).
+        if (stopReason === "max_tokens") {
+          console.warn(
+            `[ai-insight] narasi terpotong oleh batas max_tokens (${deltaTerkirim} delta, ` +
+              `${full.length} char terkumpul) -> fallback template`
+          );
+          emitTemplate(
+            "Narasi AI terpotong karena mencapai batas token (max_tokens) sebelum kalimat " +
+              "selesai — diganti template deterministik berbasis skor model spasial supaya " +
+              "tidak menampilkan narasi yang berhenti di tengah kalimat. Angka & ranking tetap akurat."
           );
           return;
         }
