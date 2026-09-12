@@ -1,7 +1,7 @@
 # Validasi Bobot Index — CAI, TDI, Transit Equity Index
 
 > **Update 2026-09-10 (CAI — kini permukaan grid 300 m):** CAI pindah dari
-> "19 titik survei + *nearest-neighbour lookup*" ke **permukaan grid 300 m** di
+> "18 titik survei + *nearest-neighbour lookup*" ke **permukaan grid 300 m** di
 > `grid_analisis` (unit spasial sama dengan TDI). **Bobot AHP CAI & consistency
 > ratio TIDAK berubah** (0,3290 / 0,3290 / 0,2002 / 0,1418; CR 0,0226) — yang
 > berubah hanya unit spasial, plus dua kriteria lapangan (`volume`, `survei`)
@@ -14,9 +14,13 @@
 > `supabase/migrations/033_skor_cai_grid.sql` (angka pasti & nama field RPC
 > dirujuk dari migration `033`, tidak diduplikasi di sini). Deviasi metodologi
 > disengaja & disetujui tim/Sam — sekelas swap `tanpa_kendaraan`→`usia_sekolah`
-> 2026-09-06. Tabel `skor_cai` berbasis titik + ranking 19 kandidat **tidak
-> dihapus** (tetap kanonik untuk 19 kandidat tervalidasi lapangan & basis
-> normalisasi `usulan_halte_model`); grid CAI murni aditif.
+> 2026-09-06. Tabel `skor_cai` berbasis titik + ranking 18 kandidat **tidak
+> dihapus** (tetap kanonik untuk 18 kandidat tervalidasi lapangan & basis
+> normalisasi `usulan_halte_model`); grid CAI murni aditif. **(Koreksi
+> 2026-09-12: angka ini sebelumnya salah tertulis "19" di seluruh dokumen —
+> `titik_kandidat` REAL sudah 18 sejak `KND-011` dihapus 2026-09-07 karena di
+> luar Kota Bekasi, sebelum tanggal update ini ditulis. Detail kronologi &
+> bukti di CLAUDE.md, bagian CAI, Catatan 2026-09-12.)**
 >
 > **Update 2026-09-06 (TDI_MOBILITAS — komponen ketiga diganti):** komponen
 > `tanpa_kendaraan` (rasio RT tanpa kendaraan pribadi) pada Indeks Kebutuhan
@@ -212,7 +216,8 @@ matriks baru, CR tidak dihitung ulang.
 | `survei` | ada halte eksisting tersurvei (Form Kondisi Halte) ≤ 400 m | Skor Form Kondisi Halte. Selain itu → **N/A**, bobot direnormalisasi. |
 
 Normalisasi min-max tiap kriteria kini **lintas seluruh sel grid berpenduduk**,
-bukan lintas 19 titik.
+bukan lintas 18 titik (dikoreksi 2026-09-12 dari "19" — lihat CLAUDE.md
+Catatan 2026-09-12).
 
 ### 0B.3 Empat pola bobot efektif per sel (dry-run live 2026-09-10, 2.607 sel)
 | Kriteria aktif | Bobot efektif | Jumlah sel |
@@ -242,9 +247,11 @@ Tidak ada klaim estimasi volume di mana pun. Prinsip inti "model/AI tidak pernah
 menciptakan angka" terpenuhi tanpa caveat statistik: kriteria yang tak terukur
 cukup dikeluarkan, bukan ditebak.
 
-### 0B.5 Grid CAI aditif — titik tetap kanonik untuk 19 kandidat
-Tabel `skor_cai` berbasis titik dan ranking 19 kandidat survei **tidak dihapus**.
-Keduanya tetap: (a) rujukan kanonik CAI untuk ke-19 kandidat **tervalidasi
+### 0B.5 Grid CAI aditif — titik tetap kanonik untuk 18 kandidat
+Tabel `skor_cai` berbasis titik dan ranking 18 kandidat survei **tidak dihapus**
+(dikoreksi 2026-09-12 dari "19" — `KND-011` sudah dihapus 2026-09-07 karena di
+luar Kota Bekasi; detail di CLAUDE.md Catatan 2026-09-12).
+Keduanya tetap: (a) rujukan kanonik CAI untuk ke-18 kandidat **tervalidasi
 lapangan**, (b) basis normalisasi min-max untuk `usulan_halte_model`. Grid CAI
 hanya menambah cakupan (permukaan se-kota untuk klik peta & gap analysis), tidak
 menggantikan. Klik peta membaca sel grid via RPC `get_cai_breakdown` (migration
@@ -470,8 +477,9 @@ sekadar review informal:
   sel (0,5000/0,5000 di 2.526 sel; 0,4113/0,4113/0,1775 di 44 sel;
   0,3834/0,3834/0,2331 di 37 sel) di Bagian 0B — 0,5/0,5 = rasio AHP
   `kepadatan`=`jarak_inv` yang di-rescale, bukan angka baru. Bobot AHP CAI & CR
-  tidak berubah. Tabel `skor_cai` berbasis titik tetap kanonik untuk 19 kandidat
-  tervalidasi lapangan; grid CAI aditif.
+  tidak berubah. Tabel `skor_cai` berbasis titik tetap kanonik untuk 18 kandidat
+  tervalidasi lapangan (dikoreksi 2026-09-12 dari "19", lihat CLAUDE.md
+  Catatan 2026-09-12); grid CAI aditif.
 - 53 dari 56 kelurahan belum punya `titik_kandidat` survei sendiri →
   `skor_cai_rata2`-nya pakai fallback rata-rata kota (ditandai di kolom
   `sumber`). Ranking Equity untuk kelurahan ini lebih lemah dasarnya.

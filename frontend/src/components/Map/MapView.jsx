@@ -156,6 +156,9 @@ export default function MapView({
   // paling lambat setelah fallback timeout (basemap MAPID kadang tidak
   // pernah mencapai 'idle', lihat catatan sinkronisasi layer di bawah).
   const [mapLoaded, setMapLoaded] = useState(false)
+  // Indikator level zoom (overlay kecil, lihat render di bawah) — state lokal
+  // saja, tidak diangkat ke App.jsx karena tidak dipakai komponen lain.
+  const [zoomLevel, setZoomLevel] = useState(BEKASI_ZOOM)
   const markerRefs = useRef([])
   const clickMarkerRef = useRef(null)
   const layerIdsRef = useRef([])
@@ -292,6 +295,20 @@ export default function MapView({
     if (!map) return
     map.getCanvas().style.cursor = simulationMode ? 'crosshair' : ''
   }, [simulationMode])
+
+  // Indikator level zoom (badge kecil top-right, lihat render di bawah) — asal
+  // pertanyaan Sam soal perilaku heatmap-radius di zoom berapa. Dengar event
+  // 'zoom' bawaan MapLibre supaya angkanya live saat pan/zoom/scroll-wheel,
+  // bukan cuma saat mount. Mount-only (deps []): map instance tidak pernah
+  // berganti selama komponen hidup, jadi tidak perlu re-subscribe.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) return
+    const updateZoom = () => setZoomLevel(map.getZoom())
+    updateZoom()
+    map.on('zoom', updateZoom)
+    return () => map.off('zoom', updateZoom)
+  }, [])
 
   // Buat satu Marker MapLibre dari spec {lat, lon, color?, popupHtml?,
   // popupText?, onClick?}. CATATAN maplibre-gl 6.x: setPopup() TIDAK lagi
@@ -487,6 +504,16 @@ export default function MapView({
           </div>
         </div>
       )}
+
+      {/* Badge level zoom — top-right, di SAMPING (bukan di bawah) kolom tombol
+          NavigationControl/Reset/Geolocate/Fullscreen bawaan MapLibre, supaya
+          tidak perlu menebak tinggi total tumpukan kontrol itu (bertambah
+          kalau ada kontrol baru ditambah nanti). LayerControl ada di
+          top-left, CaiScorePanel di bottom-left, MapLegend di bottom-right,
+          banner mode simulasi di top-center — pojok ini sengaja kosong. */}
+      <div className="absolute top-3 right-14 z-10 rounded-xl border border-slate-200 bg-white/95 px-2.5 py-1 text-xs font-medium text-slate-600 shadow-lg backdrop-blur-sm">
+        Zoom: {zoomLevel.toFixed(1)}
+      </div>
 
       {simulationMode && (
         <div className="absolute top-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-2 rounded-full bg-brand-orange/95 px-4 py-2 text-sm font-medium text-white shadow-lg backdrop-blur-sm">

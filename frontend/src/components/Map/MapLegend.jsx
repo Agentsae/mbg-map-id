@@ -7,8 +7,9 @@ import { ChevronDown, ChevronUp, Layers } from 'lucide-react'
  * jadi sengaja berseberangan supaya tidak tumpang tindih).
  *
  * Bisa diciutkan: bilah header "Keterangan Peta" selalu tampil + jadi
- * tombol buka/tutup. Default = TERBUKA saat load supaya tim/juri langsung
- * melihat legenda; badge angka di header menunjukkan jumlah entri total.
+ * tombol buka/tutup. Default = TERTUTUP saat load supaya tidak menutupi
+ * peta; user tinggal klik header untuk membuka bila perlu. Badge angka
+ * di header menunjukkan jumlah entri total meski masih tertutup.
  * State lokal saja, tidak dipersistenkan.
  *
  * Props:
@@ -33,7 +34,7 @@ import { ChevronDown, ChevronUp, Layers } from 'lucide-react'
  *     sebagai pembeda non-warna.
  */
 export default function MapLegend({ groups }) {
-  const [expanded, setExpanded] = useState(true)
+  const [expanded, setExpanded] = useState(false)
 
   if (!groups?.length) return null
 
