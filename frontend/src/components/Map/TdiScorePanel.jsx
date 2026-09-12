@@ -1,11 +1,24 @@
 import { X, MapPinOff, ArrowUpRight, ArrowDownRight } from 'lucide-react'
 
 /**
- * TdiScorePanel — overlay di atas peta "Analisis Spasial" yang muncul saat user
- * klik sel choropleth SEDANGKAN layer aktif = "Indeks Gap Aksesibilitas" (TDI).
- * Menampilkan skor Transit Desert Index sel terpilih + rincian kontribusi tiap
- * komponen formula — acceptance criteria PRD Bab 8 ("CAI & TDI — klik lokasi ->
- * rincian kontribusi tiap kriteria, bukan angka tunggal").
+ * TdiScorePanel — overlay di atas peta UTAMA (dipakai bersama tab "Peta
+ * Interaktif" & "Analisis Spasial", lihat App.jsx) yang muncul saat user klik
+ * peta SEDANGKAN overlai analitik aktif = "Transit Desert Index" (state
+ * `analyticOverlay === 'tdi'`, App.jsx). Menampilkan skor Transit Desert Index
+ * (TDI) sel terpilih + rincian kontribusi tiap komponen formula — acceptance
+ * criteria PRD Bab 8 ("CAI & TDI — klik lokasi -> rincian kontribusi tiap
+ * kriteria, bukan angka tunggal").
+ *
+ * Dipindah dari components/AnalisisSpasial/TdiScorePanel.jsx pada konsolidasi
+ * peta 2026-09-12 (Analisis Spasial tidak lagi punya <MapView> sendiri —
+ * klik-untuk-rincian TDI kini ditangani App.jsx di peta utama yang sama
+ * dipakai seluruh tab). Perilaku & kontrak `result` TIDAK berubah.
+ *
+ * Catatan istilah: skor ini disebut TDI (Transit Desert Index) di SELURUH UI
+ * — label lama "Indeks Gap Aksesibilitas" (dulu dipakai AnalisisSpasial.jsx)
+ * sudah dihapus supaya tidak terkesan metrik berbeda dari TDI yang disebut di
+ * tempat lain (permintaan Sam 2026-09-12). Secara substansi label ini tetap
+ * memenuhi istilah PRD Bab 8 "indeks gap aksesibilitas" — lihat CLAUDE.md.
  *
  * PENTING — TDI itu RASIO, bukan kombinasi linear berbobot seperti CAI:
  *   TDI_raw = Kepadatan x Indeks Kebutuhan Mobilitas / maks(Skor Aksesibilitas, 0,01)
@@ -14,9 +27,14 @@ import { X, MapPinOff, ArrowUpRight, ArrowDownRight } from 'lucide-react'
  * CaiScorePanel. Tiap komponen dirender menurut `peran`:
  *   - 'pembilang' -> menaikkan TDI (defisit layanan makin besar)
  *   - 'penyebut'  -> menurunkan TDI (akses transit sudah baik)
- * Angka diambil apa adanya dari RPC get_tdi_breakdown (migration 015) yang hanya
- * MENYAJIKAN kolom grid_analisis yang sudah dihitung offline — frontend tidak
- * menghitung ulang skor.
+ * Angka diambil apa adanya dari RPC get_tdi_breakdown (migration 015, refined
+ * 021/027) yang hanya MENYAJIKAN kolom grid_analisis yang sudah dihitung
+ * offline — frontend tidak menghitung ulang skor.
+ *
+ * Posisi: bottom-3 left-3, sama dengan CaiScorePanel (bottom-4 left-4) —
+ * TIDAK tumpang tindih pada praktiknya karena keduanya digerakkan oleh
+ * handleMapClick yang eksklusif per state `analyticOverlay` (hanya salah satu
+ * dari caiResult/tdiResult yang pernah terisi pada satu waktu, lihat App.jsx).
  */
 export default function TdiScorePanel({ loading, result, usingDemo, onClose }) {
   if (!loading && !result) return null
