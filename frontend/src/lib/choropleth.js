@@ -9,13 +9,17 @@
 //
 // Dua gaya rendering hidup berdampingan di sini:
 //  - DISKRET (classBreaks/quantileBreaks + stepFillColorExpr + legendClassRows):
-//    dipakai AnalisisSpasial.jsx. Legenda menambah nomor kelas + rentang angka
-//    sebagai pembeda non-warna.
+//    dulu dipakai AnalisisSpasial.jsx sebelum tab itu punya <MapView> sendiri.
+//    Sejak konsolidasi peta 2026-09-12 (AnalisisSpasial.jsx jadi panel kontrol
+//    murni atas peta utama, lihat komentar di file itu), TIDAK ADA pemanggil
+//    aktif untuk gaya ini di frontend — tetap diekspor (tidak dihapus) untuk
+//    jaga-jaga kalau dibutuhkan lagi di masa depan.
 //  - KONTINU (linearInterpolateFillColorExpr / sqrtInterpolateFillColorExpr +
-//    gradientCssFromColors): dipakai overlai "Peta Interaktif" (App.jsx) sejak
-//    2026-09-12, menggantikan heatmap density-based (TDI) dan kelas kuantil
-//    (kepadatan) yang keduanya terbukti menyesatkan pada data nyata — lihat
-//    komentar di tiap fungsi kontinu untuk detail & angka.
+//    gradientCssFromColors): dipakai overlai analitik peta utama (App.jsx,
+//    state `analyticOverlay`, dibagi oleh tab "Peta Interaktif" & "Analisis
+//    Spasial") sejak 2026-09-12, menggantikan heatmap density-based (TDI) dan
+//    kelas kuantil (kepadatan) yang keduanya terbukti menyesatkan pada data
+//    nyata — lihat komentar di tiap fungsi kontinu untuk detail & angka.
 //
 // Ini murni format/normalisasi tampilan; TIDAK menghitung ulang CAI/TDI/Equity
 // Index (angka datang apa adanya dari grid_analisis yang dihitung data-ai-analyst).
@@ -42,9 +46,10 @@ export function classBreaks([min, max], n) {
  * memuat kira-kira jumlah sel yang sama. Dipakai overlai "Kepadatan penduduk"
  * di Peta Interaktif supaya variasi kepadatan terbaca (equal-interval linear
  * menumpuk mayoritas sel di kelas terendah -> peta nyaris polos).
- * classBreaks (equal-interval) SENGAJA tidak diubah — AnalisisSpasial.jsx masih
- * memakainya. Hasil dijamin strictly ascending (nilai duplikat didorong tipis)
- * supaya ekspresi 'step' MapLibre tidak menolak.
+ * classBreaks (equal-interval) SENGAJA tidak diubah — tidak ada pemanggil aktif
+ * per 2026-09-12 (lihat catatan konsolidasi peta di kepala file), tapi
+ * dipertahankan apa adanya. Hasil dijamin strictly ascending (nilai duplikat
+ * didorong tipis) supaya ekspresi 'step' MapLibre tidak menolak.
  */
 export function quantileBreaks(values, n) {
   const nums = values
@@ -124,12 +129,12 @@ export function toCentroidPointFC(cells, valueKey) {
  * Ekspresi 'step' MapLibre untuk fill-color diskret dari daftar ambang kelas
  * (hasil classBreaks / quantileBreaks) + CHOROPLETH_COLORS.
  *
- * MASIH DIPAKAI oleh AnalisisSpasial.jsx (layer choropleth di tab "Analisis
- * Spasial", instance MapView terpisah dari overlai "Peta Interaktif") — JANGAN
- * dihapus/diubah perilakunya. Overlai "kepadatan" di Peta Interaktif sejak
- * 2026-09-12 pindah ke kontinu (lihat sqrtInterpolateFillColorExpr /
- * linearInterpolateFillColorExpr di bawah); fungsi ini tetap ada untuk jalur
- * lain yang masih memakainya.
+ * Tidak ada pemanggil aktif per 2026-09-12 (dulu dipakai AnalisisSpasial.jsx
+ * saat tab itu masih punya <MapView> sendiri dengan choropleth kelas diskret —
+ * lihat catatan konsolidasi peta di kepala file) — JANGAN dihapus/diubah
+ * perilakunya, tetap diekspor untuk jaga-jaga. Overlai "kepadatan" di peta
+ * utama sejak 2026-09-12 pindah ke kontinu (lihat sqrtInterpolateFillColorExpr
+ * / linearInterpolateFillColorExpr di bawah).
  */
 export function stepFillColorExpr(breaks) {
   const expr = ['step', ['get', 'value'], CHOROPLETH_COLORS[0]]

@@ -15,6 +15,7 @@ import {
 import MapView from './components/Map/MapView'
 import SearchBar from './components/Search/SearchBar'
 import CaiScorePanel from './components/Map/CaiScorePanel'
+import TdiScorePanel from './components/Map/TdiScorePanel'
 import MapLegend from './components/Map/MapLegend'
 import LayerControl from './components/Map/LayerControl'
 import AIPanel from './components/AIPanel/AIPanel'
@@ -251,6 +252,54 @@ const DEMO_CAI_BREAKDOWN_VOLUME = {
     'Data contoh — surface CAI grid 300 m HYBRID: sel ini ≤ 300 m dari titik cacah lapangan, jadi ' +
     'kriteria volume transit AKTIF (traffic counting riil). Kriteria survei kondisi halte N/A ' +
     '(tidak ada halte tersurvei ≤ 400 m); bobot 3 kriteria sisanya direnormalisasi ke jumlah 1.',
+}
+
+// Rincian TDI contoh — dipakai kalau Supabase belum tersambung / RPC
+// get_tdi_breakdown gagal, saat overlai analitik = 'tdi' dan user klik peta.
+// Struktur meniru output RPC (migration 015, refined 021/027) apa adanya;
+// TIDAK ada formula dihitung di sini, murni angka contoh statis. Dipindah dari
+// AnalisisSpasial.jsx pada konsolidasi peta 2026-09-12 (klik-untuk-rincian TDI
+// kini ditangani di sini, peta utama, bukan di peta kecil terpisah).
+const DEMO_TDI_BREAKDOWN = {
+  ditemukan: true,
+  cell_id: null,
+  match: 'memuat',
+  jarak_ke_sel_m: 0,
+  skor_tdi: 0.68,
+  skor_tdi_reproduksi_perkiraan: 0.679,
+  tdi_raw: 41.32,
+  aksesibilitas_floor: 0.01,
+  formula:
+    'TDI_raw = kepadatan_penduduk x indeks_kebutuhan_mobilitas / maks(skor_aksesibilitas_transit, 0,01); ' +
+    'skor_tdi = normalisasi_minmax(ln(1 + TDI_raw)) lintas seluruh sel grid',
+  komponen: [
+    {
+      kunci: 'kepadatan_penduduk',
+      label: 'Kepadatan penduduk',
+      nilai: 8120.5,
+      satuan: 'jiwa per sel (~300 x 300 m, hasil dasymetric mapping)',
+      peran: 'pembilang',
+      arah: 'Makin tinggi -> TDI makin tinggi (defisit layanan makin besar)',
+    },
+    {
+      kunci: 'indeks_kebutuhan_mobilitas',
+      label: 'Indeks Kebutuhan Mobilitas',
+      nilai: 0.612,
+      satuan: 'indeks 0-1 (proksi: proporsi usia rentan, kepadatan POI harian, proporsi usia sekolah 5-19)',
+      peran: 'pembilang',
+      arah: 'Makin tinggi -> TDI makin tinggi',
+    },
+    {
+      kunci: 'skor_aksesibilitas_transit',
+      label: 'Skor Aksesibilitas Transit',
+      nilai: 0.12,
+      satuan: 'indeks 0-1 (coverage isochrone 400/800 m ke halte eksisting terdekat)',
+      peran: 'penyebut',
+      arah: 'Makin tinggi -> TDI makin RENDAH (akses transit sudah baik)',
+    },
+  ],
+  catatan:
+    'Data contoh. skor_tdi lebih tinggi = sel makin "transit desert" (makin butuh prioritas).',
 }
 
 // Data contoh halte_eksisting — dipakai kalau Supabase belum tersambung/tabel
@@ -731,6 +780,22 @@ export default function App() {
   const [caiResult, setCaiResult] = useState(null)
   const [caiUsingDemo, setCaiUsingDemo] = useState(!isConfigured)
 
+  // --- Rincian TDI per klik lokasi — aktif HANYA saat analyticOverlay==='tdi'
+  // (konsolidasi peta 2026-09-12: dipindah dari AnalisisSpasial.jsx, yang dulu
+  // punya <MapView> + handleMapClick sendiri). RPC get_tdi_breakdown HANYA
+  // menyajikan kolom grid_analisis yang sudah dihitung offline (data-ai-analyst)
+  // — tidak ada skor dihitung ulang di sini.
+  const [tdiLoading, setTdiLoading] = useState(false)
+  const [tdiResult, setTdiResult] = useState(null)
+  const [tdiUsingDemo, setTdiUsingDemo] = useState(!isConfigured)
+
+  // Overlai berpindah menjauh dari 'tdi' (mis. user ganti ke 'kepadatan' atau
+  // 'none') -> tutup panel rincian TDI yang mungkin masih terbuka, supaya
+  // tidak ada panel basi yang tidak relevan lagi dengan overlai aktif.
+  useEffect(() => {
+    if (analyticOverlay !== 'tdi') setTdiResult(null)
+  }, [analyticOverlay])
+
   // Daftar titik_kandidat + skor_cai — di-fetch sekali di awal supaya klik peta
   // instan (tidak query ulang tiap klik) DAN supaya bisa dirender sebagai marker
   // di peta (state, bukan ref, karena harus memicu render ulang marker). Ini
@@ -951,6 +1016,35 @@ export default function App() {
       return
     }
 
+    if (analyticOverlay === 'tdi') {
+      // --- Alur rincian TDI (RPC get_tdi_breakdown) — aktif hanya saat
+      // overlai analitik = 'tdi' (dipindah dari AnalisisSpasial.jsx, lihat
+      // catatan state tdiResult di atas). Klik saat overlai lain aktif tetap
+      // masuk jalur CAI di bawah, tidak berubah.
+      setTdiLoading(true)
+      setCaiResult(null)
+      setSimResult(null)
+      setClickMarker({ lat, lon, color: '#334155', popupText: 'Lokasi dicek', pulse: true })
+
+      if (isConfigured) {
+        setTdiUsingDemo(false)
+        try {
+          const { data, error } = await supabase.rpc('get_tdi_breakdown', { lng: lon, lat })
+          if (error) throw error
+          setTdiResult(data)
+        } catch (err) {
+          console.error('Gagal memanggil get_tdi_breakdown:', err)
+          setTdiResult({ ditemukan: false, pesan: 'Gagal memuat rincian TDI.' })
+        }
+      } else {
+        setTdiUsingDemo(true)
+        await new Promise((r) => setTimeout(r, 300))
+        setTdiResult(DEMO_TDI_BREAKDOWN)
+      }
+      setTdiLoading(false)
+      return
+    }
+
     // --- Alur skor CAI (klik lokasi -> RPC get_cai_breakdown, surface grid 300 m) ---
     // Sejak CAI pindah dari 19 titik_kandidat diskret ke SURFACE grid 300 m
     // (grid_analisis, migration 033), skor CAI tersedia untuk SEMBARANG
@@ -993,7 +1087,7 @@ export default function App() {
       setCaiResult(pakaiVolume ? DEMO_CAI_BREAKDOWN_VOLUME : DEMO_CAI_BREAKDOWN)
     }
     setCaiLoading(false)
-  }, [simulationActive, runSimulationAt])
+  }, [simulationActive, runSimulationAt, analyticOverlay])
 
   function handleToggleSimulation() {
     setSimulationActive((v) => !v)
@@ -1619,6 +1713,15 @@ export default function App() {
                 setClickMarker(null)
               }}
             />
+            <TdiScorePanel
+              loading={tdiLoading}
+              result={tdiResult}
+              usingDemo={tdiUsingDemo}
+              onClose={() => {
+                setTdiResult(null)
+                setClickMarker(null)
+              }}
+            />
             {activeTab === 'peta' && (
               <MapLegend
                 groups={[
@@ -1722,7 +1825,19 @@ export default function App() {
         {showPanel && (
           <aside className="w-96 shrink-0 bg-white border-l border-slate-200 overflow-hidden">
             {activeTab === 'dashboard' && <Dashboard />}
-            {activeTab === 'analisis' && <AnalisisSpasial />}
+            {activeTab === 'analisis' && (
+              <AnalisisSpasial
+                mapInstance={mapInstance}
+                analyticOverlay={analyticOverlay}
+                onAnalyticOverlayChange={setAnalyticOverlay}
+                overlayLoading={gridChoroLoading}
+                legendGroup={choroLegendGroup}
+                sorotWilayah={sorotWilayah}
+                onWilayahSelected={setSorotWilayah}
+                layerVis={layerVis}
+                onLayerVisChange={setLayerVis}
+              />
+            )}
             {activeTab === 'ai' && <AIPanel latestSimulasi={lastSimResult} />}
             {activeTab === 'simulasi' && (
               <SimulationPanel
