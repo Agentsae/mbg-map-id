@@ -257,11 +257,42 @@ export default function MapView({
         map.addSource(id, { type: 'geojson', data })
       }
       if (!map.getLayer(id)) {
+        // TANPA beforeId: MapLibre menaruh layer BARU di paling ATAS stack
+        // internal peta, TERLEPAS dari posisi elemen ini di array `layers` —
+        // itu z-order MapLibre yang sebenarnya (kapan addLayer dipanggil),
+        // BUKAN urutan array. Reorder eksplisit di bawah (setelah loop ini)
+        // yang benar-benar menegakkan "array order = urutan gambar".
         map.addLayer({ id, type, source: id, paint, layout })
       } else {
         Object.entries(paint).forEach(([k, v]) => map.setPaintProperty(id, k, v))
       }
       map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none')
+    })
+
+    // Tegakkan ulang z-order = urutan array `currentLayers` (elemen terakhir
+    // = paling atas), TERLEPAS dari kapan tiap layer ditambahkan.
+    //
+    // BUG YANG DIPERBAIKI (2026-09-13, ditemukan smoke test setelah fix
+    // sorotan kecamatan): sorot-wilayah-* ditaruh PALING AKHIR di array
+    // App.jsx supaya selalu di atas overlay analitik — tapi itu HANYA benar
+    // kalau overlay analitik itu sudah ada di peta SEBELUM sorot-wilayah
+    // ditambahkan. Urutan sebaliknya (pilih kecamatan dulu saat overlay
+    // Kepadatan aktif -> sorot-wilayah ke atas dg benar -> lalu GANTI overlay
+    // ke TDI) membuat layer TDI yang baru (id beda dari Kepadatan) ditambah
+    // LEBIH BELAKANGAN secara waktu, sehingga MapLibre menaruhnya di ATAS
+    // sorot-wilayah yang sudah ada duluan -- sorotan jadi tertutup TDI,
+    // persis skenario yang smoke test temukan. `if (!map.getLayer(id))` di
+    // atas sengaja tidak pernah memindahkan layer yang SUDAH ada, jadi bug
+    // ini tidak bisa hilang sendiri hanya dari re-run reconcile biasa.
+    //
+    // moveLayer(id) TANPA argumen kedua memindahkan layer ke PALING ATAS;
+    // memanggilnya berurutan sesuai urutan array (bukan urutan waktu
+    // addLayer) membangun ulang persis urutan yang dimaksud array setiap
+    // reconcile — biaya rendah (mutasi style, bukan re-render/refetch data)
+    // dan idempoten, aman dipanggil di setiap sinkronisasi termasuk saat
+    // urutan sebenarnya sudah benar.
+    currentLayers.forEach((layer) => {
+      if (map.getLayer(layer.id)) map.moveLayer(layer.id)
     })
 
     layerIdsRef.current = currentLayers.map((l) => l.id)
