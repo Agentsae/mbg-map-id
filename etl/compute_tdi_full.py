@@ -81,7 +81,7 @@ import numpy as np
 import pandas as pd
 from shapely.geometry import shape
 
-from compute_scores import compute_tdi, sensitivity_check_tdi, DEFAULT_MOBILITY_WEIGHTS
+from compute_scores import compute_tdi, sensitivity_check_tdi, DEFAULT_MOBILITY_WEIGHTS, compute_tdi_confidence
 from rerun_dasymetric_grid import (
     fetch_all_paginated,
     wkb_hex_to_geom,
@@ -353,12 +353,24 @@ if __name__ == "__main__":
     print("\n=== 3. Hitung compute_tdi() untuk seluruh grid ===")
     scored = compute_tdi(df, weights)
 
+    # Confidence Ratio TDI (035/docs/CONFIDENCE_RATIO.md) — BUKAN skor_tdi,
+    # murni sinyal keandalan tambahan berdasar sumber_halte_terdekat yang
+    # SUDAH dihitung di build_grid_features() (in-memory sebelumnya, sejak
+    # 035 dipersist ke grid_analisis). Dipanggil terpisah SETELAH compute_tdi()
+    # persis seperti didokumentasikan di compute_tdi_confidence() sendiri —
+    # tidak menyentuh skor_tdi/skor_aksesibilitas_transit sama sekali.
+    _confidence = compute_tdi_confidence(scored["sumber_halte_terdekat"])
+    scored["tdi_confidence_ratio"] = _confidence["tdi_confidence_ratio"].values
+    scored["tdi_confidence_tier"] = _confidence["tdi_confidence_tier"].values
+
     print("\n--- Ringkasan distribusi skor_tdi ---")
     print(scored["skor_tdi"].describe().round(4).to_string())
     print("\n--- Ringkasan distribusi kepadatan_penduduk (input, dasymetric-real) ---")
     print(scored["kepadatan_penduduk"].describe().round(2).to_string())
     print("\n--- Ringkasan distribusi skor_aksesibilitas_transit ---")
     print(scored["skor_aksesibilitas_transit"].describe().round(4).to_string())
+    print("\n--- Ringkasan Confidence Ratio TDI (BUKAN AHP consistency_ratio) ---")
+    print(scored["tdi_confidence_tier"].value_counts().to_string())
 
     print(f"\nTop 10 cell paling 'transit desert' (skor_tdi tertinggi):")
     print(scored[["grid_analisis_id", "kepadatan_penduduk", "proporsi_usia_rentan",

@@ -463,6 +463,11 @@ kelurahan lain cukup disinggung ringkas (nama + skor_ketimpangan) di bagian Cond
    dipadukan dengan dimensi kerentanan sosial (usia rentan, akses pendidikan/kesehatan/kerja),
    dengan bobot hasil AHP pairwise (CR < 0,1). Jangan menghitung ulang / mengarang sub-skor
    CAI/TDI per kriteria — data tidak memuatnya.
+   ISTILAH WAJIB DIBEDAKAN (jangan pernah tertukar): sebutan di atas adalah "consistency ratio"
+   atau disingkat "CR" — validitas matriks pairwise AHP, BUKAN "confidence ratio". "Confidence
+   ratio"/"confidence" adalah metrik LAIN (keandalan skor per lokasi terhadap kondisi lapangan)
+   yang HANYA boleh disebut kalau field "confidence"/"confidence_ratio" benar-benar ada di data
+   yang dilampirkan — kalau tidak ada di data, jangan sebut "confidence ratio" sama sekali.
 3. IMPACT (Dampak): konsekuensi konkret bila tanpa intervensi BAGI "kelompok_terdampak" dari
    data (mis. lansia, pelajar, warga tanpa kendaraan): mobilitas makin terbatas, kesenjangan
    makin lebar. Bila "kelompok_terdampak" null, nyatakan profilnya belum tersedia dan perlu
