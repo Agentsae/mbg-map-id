@@ -74,7 +74,12 @@ import numpy as np
 import pandas as pd
 import shapely.geometry as sg
 
-from compute_scores import normalize_min_max, DEFAULT_WEIGHTS, CAI_CRITERIA_KEYS
+from compute_scores import (
+    normalize_min_max,
+    DEFAULT_WEIGHTS,
+    CAI_CRITERIA_KEYS,
+    confidence_tier_dari_ratio,
+)
 from build_fishnet_grid import WGS84
 from rerun_dasymetric_grid import fetch_all_paginated, wkb_hex_to_geom
 
@@ -266,6 +271,15 @@ def compute_cai_grid(grid: gpd.GeoDataFrame, poi: gpd.GeoDataFrame,
     out["cai_bobot_volume"] = np.where(has_volume, w["volume"] / denom, np.nan)
     out["cai_bobot_survei"] = np.where(has_survei, w["survei"] / denom, np.nan)
 
+    # --- 5b. Confidence Ratio (BARU 2026-09-13, BUKAN AHP consistency_ratio —
+    #     lihat docs/CONFIDENCE_RATIO.md) = n_kriteria_aktif / 4. Kepadatan &
+    #     jarak SELALU aktif (2); +volume/+survei kalau kriteria itu aktif di
+    #     sel ini. Murni sinyal keandalan tambahan, TIDAK memengaruhi cai_skor. ---
+    n_aktif = 2 + has_volume.astype(int) + has_survei.astype(int)
+    out["cai_confidence_n_kriteria"] = n_aktif
+    out["cai_confidence_ratio"] = n_aktif / 4.0
+    out["cai_confidence_tier"] = out["cai_confidence_ratio"].map(confidence_tier_dari_ratio)
+
     # --- 6. skor CAI grid (ADITIF: Sum nilai_i * bobot_i untuk kriteria AKTIF) ---
     term_v = (out["cai_bobot_volume"] * out["cai_n_volume"]).where(pd.Series(has_volume, index=out.index), 0.0)
     term_s = (out["cai_bobot_survei"] * out["cai_n_survei"]).where(pd.Series(has_survei, index=out.index), 0.0)
@@ -298,6 +312,7 @@ _SAMPLE_COLS = [
     "id", "kepadatan_penduduk", "cai_jarak_fasilitas_m", "cai_volume_penumpang", "cai_volume_estimasi",
     "cai_n_kepadatan", "cai_n_jarak_inv", "cai_n_volume", "cai_n_survei",
     "cai_bobot_kepadatan", "cai_bobot_jarak", "cai_bobot_volume", "cai_bobot_survei", "cai_skor",
+    "cai_confidence_ratio", "cai_confidence_tier",
 ]
 
 
@@ -379,6 +394,14 @@ def upload_cai_grid(client, out: pd.DataFrame, chunk: int = 500, resume: bool = 
             "cai_bobot_volume": _num_or_none(r["cai_bobot_volume"], 4),
             "cai_bobot_survei": _num_or_none(r["cai_bobot_survei"], 4),
             "cai_skor": _num_or_none(r["cai_skor"], 4),
+            # Confidence Ratio (035/docs/CONFIDENCE_RATIO.md) — dihitung di
+            # compute_cai_grid() di atas. Migration 035 sudah membackfill kolom
+            # ini langsung via SQL untuk data yang ada saat migration di-apply;
+            # disertakan di sini juga supaya rerun ETL berikutnya (data baru/
+            # berubah) tidak meninggalkan confidence basi dibanding cai_bobot_*.
+            "cai_confidence_n_kriteria": int(r["cai_confidence_n_kriteria"]),
+            "cai_confidence_ratio": _num_or_none(r["cai_confidence_ratio"], 4),
+            "cai_confidence_tier": r["cai_confidence_tier"],
             "cai_dihitung_pada": now_iso,
         }
         client.table("grid_analisis").update(payload).eq("id", int(r["id"])).execute()

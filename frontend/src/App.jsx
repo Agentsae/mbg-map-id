@@ -30,6 +30,7 @@ import { supabase, isConfigured } from './lib/supabaseClient'
 import { extractLatLon, extractLineStringCoords, extractPolygonRings, haversineMeters } from './lib/geo'
 import { isDummyHalte } from './lib/halteEksisting'
 import { fetchAllRows } from './lib/fetchAllRows'
+import { SOROT_WILAYAH_COLOR, SOROT_WILAYAH_HALO_COLOR } from './lib/mapColors'
 import {
   CHOROPLETH_COLORS,
   computeMinMax,
@@ -466,16 +467,17 @@ const TRANSJAKARTA_B21_COLOR = '#DC2626'
 const BATAS_KOTA_COLOR = '#1B659D'
 
 // Warna sorotan batas wilayah TERPILIH dari hasil pencarian (kelurahan/kecamatan
-// via RPC get_admin_geometry). Sengaja dibedakan tegas dari BATAS_KOTA_COLOR:
-// batas kota = biru brand + PUTUS-PUTUS ("area studi", konteks permanen);
-// wilayah terpilih = emas + SOLID tebal + isian tipis ("area yang barusan kamu
-// pilih", sementara). Beda bentuk garis + adanya isian bidang membuat keduanya
-// terbedakan TANPA bergantung warna sama sekali (syarat colorblind-safe
-// CLAUDE.md Bab 10.3) — dan emas adalah satu-satunya rumpun warna yang belum
-// dipakai legenda (hijau/ungu/oranye/biru/teal/magenta sudah terpakai).
+// via RPC get_admin_geometry) DAN filter kecamatan di tab Analisis Spasial.
+// Sengaja dibedakan tegas dari BATAS_KOTA_COLOR: batas kota = biru brand +
+// PUTUS-PUTUS ("area studi", konteks permanen); wilayah terpilih = emas +
+// SOLID tebal + isian tipis ("area yang barusan kamu pilih", sementara). Beda
+// bentuk garis + adanya isian bidang membuat keduanya terbedakan TANPA
+// bergantung warna sama sekali (syarat colorblind-safe CLAUDE.md Bab 10.3).
 // Tidak memakai pasangan merah–hijau sama sekali.
-// TODO(ui-ux-designer): emas ini asumsi webgis-developer, bukan keputusan desain final.
-const SOROT_WILAYAH_COLOR = '#CA8A04'
+// Dipindah ke lib/mapColors.js (2026-09-13, ui-ux-designer, final — bukan lagi
+// TODO) supaya AnalisisSpasial.jsx bisa memakai warna yang SAMA PERSIS untuk
+// badge nama kecamatan terpilih di panel kontrol, tanpa hex literal kedua.
+// Lihat lib/mapColors.js untuk rincian perbaikan kontras garis (halo gelap).
 
 function escapeHtml(str) {
   return String(str ?? '').replace(/[&<>"']/g, (c) => (
@@ -1505,19 +1507,43 @@ export default function App() {
       paint: { 'line-color': BATAS_KOTA_COLOR, 'line-width': 2.5, 'line-dasharray': [3, 2] },
       visible: layerVis.batasKota,
     },
-    // Sorotan wilayah terpilih dari pencarian — DITARUH PALING AKHIR supaya
-    // digambar di atas semua layer lain (elemen belakang array = paling atas).
-    // Isian sengaja sangat tipis (opacity 0,12): fungsinya menegaskan BIDANG
-    // wilayahnya, bukan mewarnai; grid/marker/rute di bawahnya tetap terbaca.
-    // Garis tepi 3px SOLID = elemen yang benar-benar dilihat user, sekaligus
-    // pembeda bentuk terhadap batas kota yang putus-putus.
+    // Sorotan wilayah terpilih dari pencarian / filter kecamatan (Analisis
+    // Spasial) — DITARUH PALING AKHIR supaya digambar di atas semua layer
+    // lain (elemen belakang array = paling atas), termasuk overlai analitik
+    // (Kepadatan/TDI) yang bisa aktif bersamaan di tab Analisis Spasial.
+    // Isian sengaja tipis (opacity 0,16): menegaskan BIDANG wilayahnya, bukan
+    // mewarnai penuh; grid/marker/rute di bawahnya tetap terbaca.
+    //
+    // Perbaikan 2026-09-13 (Sam melaporkan garis nyaris tak terlihat di
+    // peta): garis gold sebelumnya (line-width 3, tanpa halo) nyaris menyatu
+    // dengan (a) jalan basemap yang kebetulan oranye/amber, dan (b) ujung
+    // pucat/terang KEDUA palet choropleth kontinu (YlGnBu #ffffcc, Viridis
+    // #fde725 — lib/choropleth.js). Solusi: layer 'sorot-wilayah-garis-halo'
+    // digambar LEBIH DULU (lebar 6,5, warna gelap SOROT_WILAYAH_HALO_COLOR)
+    // sebagai casing kontras, lalu 'sorot-wilayah-garis' (gold, lebar 3,2)
+    // di atasnya sebagai core — pola casing gelap + core terang ini terbaca
+    // di ATAS/BAWAH kedua ujung kedua palet sekaligus (beda dari halo putih
+    // konvensional yang akan hilang di sel YlGnBu paling pucat). Ini murni
+    // pembeda VISUAL (bentuk garis dobel + kontras luminansi), bukan
+    // bergantung pada satu hue tunggal — konsisten dengan syarat
+    // colorblind-safe CLAUDE.md Bab 10.3.
     ...(sorotWilayahGeoJSON
       ? [
           {
             id: 'sorot-wilayah-fill',
             type: 'fill',
             data: sorotWilayahGeoJSON,
-            paint: { 'fill-color': SOROT_WILAYAH_COLOR, 'fill-opacity': 0.12 },
+            paint: { 'fill-color': SOROT_WILAYAH_COLOR, 'fill-opacity': 0.16 },
+          },
+          {
+            id: 'sorot-wilayah-garis-halo',
+            type: 'line',
+            data: sorotWilayahGeoJSON,
+            paint: {
+              'line-color': SOROT_WILAYAH_HALO_COLOR,
+              'line-width': 6.5,
+              'line-opacity': 0.85,
+            },
           },
           {
             id: 'sorot-wilayah-garis',
@@ -1525,8 +1551,8 @@ export default function App() {
             data: sorotWilayahGeoJSON,
             paint: {
               'line-color': SOROT_WILAYAH_COLOR,
-              'line-width': 3,
-              'line-opacity': 0.95,
+              'line-width': 3.2,
+              'line-opacity': 1,
             },
           },
         ]
@@ -1704,24 +1730,36 @@ export default function App() {
             clickMarker={clickMarker}
             layers={mapLayers}
           >
-            <CaiScorePanel
-              loading={caiLoading}
-              result={caiResult}
-              usingDemo={caiUsingDemo}
-              onClose={() => {
-                setCaiResult(null)
-                setClickMarker(null)
-              }}
-            />
-            <TdiScorePanel
-              loading={tdiLoading}
-              result={tdiResult}
-              usingDemo={tdiUsingDemo}
-              onClose={() => {
-                setTdiResult(null)
-                setClickMarker(null)
-              }}
-            />
+            {/* Varian 'floating' (default) HANYA di luar tab Analisis Spasial
+                sejak 2026-09-13 (permintaan Sam) -- tab itu sekarang merender
+                CaiScorePanel/TdiScorePanel-nya SENDIRI dg variant="inline" di
+                panel kanan (lihat AnalisisSpasial.jsx), supaya rincian klik
+                tampil di bawah toggle overlai, bukan menutupi peta dg kotak
+                melayang. State caiResult/tdiResult tetap satu-satunya sumber
+                (di-lift ke sini), cuma tempat rendering-nya yang berbeda per
+                tab -- tidak ada duplikasi RPC/klik. */}
+            {activeTab !== 'analisis' && (
+              <CaiScorePanel
+                loading={caiLoading}
+                result={caiResult}
+                usingDemo={caiUsingDemo}
+                onClose={() => {
+                  setCaiResult(null)
+                  setClickMarker(null)
+                }}
+              />
+            )}
+            {activeTab !== 'analisis' && (
+              <TdiScorePanel
+                loading={tdiLoading}
+                result={tdiResult}
+                usingDemo={tdiUsingDemo}
+                onClose={() => {
+                  setTdiResult(null)
+                  setClickMarker(null)
+                }}
+              />
+            )}
             {activeTab === 'peta' && (
               <MapLegend
                 groups={[
@@ -1836,9 +1874,29 @@ export default function App() {
                 onWilayahSelected={setSorotWilayah}
                 layerVis={layerVis}
                 onLayerVisChange={setLayerVis}
+                caiLoading={caiLoading}
+                caiResult={caiResult}
+                caiUsingDemo={caiUsingDemo}
+                onCaiClose={() => {
+                  setCaiResult(null)
+                  setClickMarker(null)
+                }}
+                tdiLoading={tdiLoading}
+                tdiResult={tdiResult}
+                tdiUsingDemo={tdiUsingDemo}
+                onTdiClose={() => {
+                  setTdiResult(null)
+                  setClickMarker(null)
+                }}
               />
             )}
-            {activeTab === 'ai' && <AIPanel latestSimulasi={lastSimResult} />}
+            {activeTab === 'ai' && (
+              <AIPanel
+                latestSimulasi={lastSimResult}
+                mapInstance={mapInstance}
+                onWilayahSelected={setSorotWilayah}
+              />
+            )}
             {activeTab === 'simulasi' && (
               <SimulationPanel
                 active={simulationActive}
