@@ -227,7 +227,17 @@ function buildTemplateNarasi(
     }
   }
 
-  return [condition, cause, impact, actionDasar + actionSimulasi].join(" ");
+  // Point per point (BUKAN prosa mengalir) — SELARAS dengan format yang
+  // diwajibkan ke Claude di systemPrompt "=== FORMAT OUTPUT ===" (permintaan
+  // Sam 2026-09-13), supaya narasi TEMPLATE fallback & narasi AI terlihat
+  // sama strukturnya di AIPanel.jsx (whitespace-pre-wrap merender "\n" apa
+  // adanya, tidak perlu markdown renderer).
+  return [
+    `1. Kondisi: ${condition}`,
+    `2. Penyebab: ${cause}`,
+    `3. Dampak: ${impact}`,
+    `4. Aksi: ${actionDasar + actionSimulasi}`,
+  ].join("\n\n");
 }
 
 Deno.serve(async (req) => {
@@ -439,23 +449,33 @@ Tugasmu MENJELASKAN skor yang sudah dihitung model spasial deterministik — buk
 menebak, atau menambah angka. Kamu tidak pernah menghasilkan skor sendiri.
 
 === PANJANG ===
-Ringkas tapi LENGKAP — cukupkan tiap tahap CCIA menyampaikan isinya, jangan bertele-tele,
-jangan mengulang. Perkiraan 150-220 kata untuk KESELURUHAN narasi (4 tahap digabung); ini
+Ringkas tapi LENGKAP — cukupkan tiap POIN CCIA menyampaikan isinya, jangan bertele-tele,
+jangan mengulang. Perkiraan 150-220 kata untuk KESELURUHAN narasi (4 poin digabung); ini
 perkiraan, bukan batas keras — JANGAN mengorbankan kelengkapan isi demi menekan jumlah kata.
-Yang wajib: keempat tahap (Condition, Cause, Impact, Action) utuh tersampaikan dan narasi
-TIDAK terpotong di tengah kalimat — khususnya tahap Action beserta angka "+N jiwa"-nya harus
-selesai penuh. Setelah kalimat terakhir tahap Action, BERHENTI: tidak ada penutup, ringkasan,
+Yang wajib: keempat poin (Condition, Cause, Impact, Action) utuh tersampaikan dan narasi
+TIDAK terpotong di tengah kalimat — khususnya poin Action beserta angka "+N jiwa"-nya harus
+selesai penuh. Setelah kalimat terakhir poin Action, BERHENTI: tidak ada penutup, ringkasan,
 atau kalimat tambahan apa pun.
 
-=== FORMAT OUTPUT (WAJIB) ===
-DILARANG KERAS: heading, judul bertanda "**", bullet, list bernomor, garis pemisah "---".
-Output = paragraf mengalir Bahasa Indonesia, mulai LANGSUNG dari kalimat Condition.
-Tidak ada label "Condition:", "Cause:", dst — keempat tahap menyatu jadi prosa biasa.
+=== FORMAT OUTPUT (WAJIB — point per point, BUKAN prosa mengalir) ===
+Output HARUS 4 poin bernomor "1." sampai "4.", SATU POIN PER PARAGRAF (pisahkan tiap poin
+dengan SATU baris kosong — yaitu DUA karakter baris baru berturutan di antara poin; jangan
+gabung dua poin jadi satu baris/paragraf). Tiap poin diawali label tahapnya persis begini
+(angka + titik + spasi + label + titik dua + spasi, lalu isi):
+  1. Kondisi: <isi>
+  2. Penyebab: <isi>
+  3. Dampak: <isi>
+  4. Aksi: <isi>
+DILARANG KERAS: heading markdown ("#"), teks tebal "**", bullet "-"/"*", sub-list bernomor
+di dalam satu poin, garis pemisah "---", atau kalimat pembuka/penutup di luar keempat poin
+itu (langsung mulai dari "1. Kondisi:", langsung berhenti setelah kalimat terakhir "4. Aksi:").
+Tiap poin sendiri tetap satu paragraf mengalir (boleh lebih dari satu kalimat) — yang
+dilarang adalah menggabung ISI ANTAR poin jadi satu paragraf besar tanpa nomor/label.
 
 === KERANGKA WAJIB: CCIA (Condition -> Cause -> Impact -> Action) ===
-Bangun keempat tahap HANYA di sekitar SATU kelurahan fokus: yang "ranking":1
+Bangun keempat poin HANYA di sekitar SATU kelurahan fokus: yang "ranking":1
 (skor_ketimpangan tertinggi). JANGAN mengulang kerangka CCIA untuk tiap kelurahan;
-kelurahan lain cukup disinggung ringkas (nama + skor_ketimpangan) di bagian Condition.
+kelurahan lain cukup disinggung ringkas (nama + skor_ketimpangan) di poin Kondisi.
 1. CONDITION (Kondisi): sebut kelurahan fokus (ranking 1) beserta skor ketimpangannya dan
    kondisi terukur akses transitnya untuk cakupan yang diminta; sisipkan singkat kelurahan
    lain (nama + skor) sebagai konteks.
