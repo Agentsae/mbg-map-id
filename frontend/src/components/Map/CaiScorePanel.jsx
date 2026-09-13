@@ -1,4 +1,5 @@
 import { X, Target } from 'lucide-react'
+import ConfidenceBadge from './ConfidenceBadge'
 
 /**
  * CaiScorePanel — overlay di atas peta (di luar mode simulasi) yang muncul saat
@@ -117,6 +118,14 @@ function CaiSukses({ result }) {
           {result.cell_id != null ? ` · #${result.cell_id}` : ''}
         </p>
       </div>
+
+      {result.confidence && (
+        <ConfidenceBadge
+          tier={result.confidence.confidence_tier}
+          ratio={result.confidence.confidence_ratio}
+          detail={`${result.confidence.n_kriteria_aktif} dari ${result.confidence.n_kriteria_total} kriteria CAI terisi data di sel ini.`}
+        />
+      )}
 
       <div>
         <p className="text-xs font-medium text-slate-500 mb-2">Rincian kontribusi tiap kriteria</p>
