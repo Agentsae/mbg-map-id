@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { SlidersHorizontal, MapPin, Loader2 } from 'lucide-react'
 import { supabase, isConfigured } from '../../lib/supabaseClient'
 import { KECAMATAN_KOTA_BEKASI } from '../../lib/kecamatan'
+import CaiScorePanel from '../Map/CaiScorePanel'
+import TdiScorePanel from '../Map/TdiScorePanel'
 
 /**
  * AnalisisSpasial — panel kontrol untuk "Peta Multi-Layer Gap Analysis"
@@ -38,10 +40,17 @@ import { KECAMATAN_KOTA_BEKASI } from '../../lib/kecamatan'
  *    halte_eksisting tanpa saringan; layer yang direuse di sini sudah
  *    menyaring baris dummy `DUMMY-HLT-*` (lib/halteEksisting.js) — sekaligus
  *    perbaikan kecil.
- *  - Klik sel TDI di peta -> ditangani App.jsx sendiri (state tdiLoading/
- *    tdiResult + <TdiScorePanel> yang sudah dipindah ke components/Map/),
- *    bukan di komponen ini — makanya tidak ada lagi onMapClick/handleMapClick
- *    di sini.
+ *  - Klik sel CAI/TDI di peta -> PENANGANAN klik (handleMapClick, RPC
+ *    get_cai_breakdown/get_tdi_breakdown) tetap sepenuhnya di App.jsx, bukan
+ *    di komponen ini — tidak ada onMapClick/handleMapClick baru di sini.
+ *    TAMPILAN hasilnya SEJAK 2026-09-13 (permintaan Sam) DIRENDER DI SINI,
+ *    di panel kanan di bawah toggle overlai analitik — bukan lagi kotak
+ *    melayang di atas peta (perilaku lama itu TETAP dipakai tab "Peta
+ *    Interaktif", lihat App.jsx: <CaiScorePanel>/<TdiScorePanel> varian
+ *    'floating' hanya dirender saat activeTab !== 'analisis'). Reuse
+ *    komponen yang SAMA PERSIS (CaiScorePanel/TdiScorePanel dari
+ *    components/Map/) lewat prop `variant="inline"` yang cuma mengganti
+ *    wrapper CSS (absolute -> block biasa) — konten & logika tidak digandakan.
  *
  * TERMINOLOGI (permintaan Sam 2026-09-12): label "Indeks Gap Aksesibilitas"
  * (nama lama skor_tdi di versi lama komponen ini) DIHAPUS dari UI. Skor ini
@@ -72,6 +81,10 @@ import { KECAMATAN_KOTA_BEKASI } from '../../lib/kecamatan'
  *  - onWilayahSelected: (sorot|null) => void — setter sorotWilayah (App.jsx).
  *  - layerVis: objek visibilitas layer titik/garis (App.jsx).
  *  - onLayerVisChange: (nextValue) => void.
+ *  - caiLoading/caiResult/caiUsingDemo/onCaiClose: state klik CAI (App.jsx,
+ *    sama persis dg yang dipakai <CaiScorePanel variant="floating"> di tab
+ *    Peta Interaktif) — dirender inline di sini, lihat catatan di atas.
+ *  - tdiLoading/tdiResult/tdiUsingDemo/onTdiClose: idem untuk TDI.
  */
 const SUMBER_BATAS_RESMI = 'BIG RBI 25K KUGI50 2022-12-31 (tanahair.indonesia.go.id)'
 
@@ -85,6 +98,14 @@ export default function AnalisisSpasial({
   onWilayahSelected,
   layerVis,
   onLayerVisChange,
+  caiLoading = false,
+  caiResult = null,
+  caiUsingDemo = false,
+  onCaiClose,
+  tdiLoading = false,
+  tdiResult = null,
+  tdiUsingDemo = false,
+  onTdiClose,
 }) {
   const [kecamatanFilter, setKecamatanFilter] = useState('')
   const [kecamatanOptions, setKecamatanOptions] = useState(KECAMATAN_KOTA_BEKASI)
@@ -337,6 +358,27 @@ export default function AnalisisSpasial({
             </p>
           </div>
         )}
+
+        {/* Rincian klik sel CAI/TDI (BARU 2026-09-13) — di bawah toggle overlai
+            analitik, bukan lagi kotak melayang di atas peta (itu tetap dipakai
+            tab Peta Interaktif). Keduanya reuse komponen persis sama dg varian
+            'inline'; masing-masing render null kalau loading/result-nya kosong,
+            jadi aman dirender berdampingan (App.jsx menjamin hanya salah satu
+            yang pernah terisi pada satu waktu — lihat catatan di TdiScorePanel). */}
+        <CaiScorePanel
+          variant="inline"
+          loading={caiLoading}
+          result={caiResult}
+          usingDemo={caiUsingDemo}
+          onClose={onCaiClose}
+        />
+        <TdiScorePanel
+          variant="inline"
+          loading={tdiLoading}
+          result={tdiResult}
+          usingDemo={tdiUsingDemo}
+          onClose={onTdiClose}
+        />
       </div>
 
       {legendGroup && (

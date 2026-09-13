@@ -23,6 +23,15 @@ import { X, Target } from 'lucide-react'
  *                          skor_cai, komponen:[…2-4], catatan, formula, … }
  *   - ditemukan:false -> { di_luar_cakupan_grid } | { pesan:'…belum dihitung…' }
  *                        | { pesan:'…' } (shape #1 / rpc error)
+ *
+ * Prop `variant` (BARU 2026-09-13, permintaan Sam):
+ *   - 'floating' (default) -> overlay absolute di atas peta, dipakai tab
+ *     "Peta Interaktif" (App.jsx, anak dari <MapView>).
+ *   - 'inline' -> blok biasa dlm alur dokumen (tanpa absolute/z-index/shadow-xl
+ *     seberat versi floating), dipakai tab "Analisis Spasial" supaya rincian
+ *     tampil DI PANEL KANAN (di bawah toggle overlai analitik), bukan
+ *     menutupi peta dg kotak melayang. Konten & logika identik — hanya
+ *     wrapper luar yang beda.
  */
 
 const FALLBACK_FORMULA =
@@ -36,14 +45,20 @@ const KRITERIA_OPSIONAL = [
   { kunci: 'survei', labelNa: 'Skor survei kondisi halte — tidak berlaku di sel ini' },
 ]
 
-export default function CaiScorePanel({ loading, result, usingDemo, onClose }) {
+const WRAPPER_CLASS = {
+  floating:
+    'absolute bottom-4 left-4 z-10 w-80 max-h-[70vh] overflow-y-auto bg-white rounded-lg shadow-xl border border-slate-200',
+  inline: 'w-full bg-white rounded-lg border border-slate-200',
+}
+
+export default function CaiScorePanel({ loading, result, usingDemo, onClose, variant = 'floating' }) {
   if (!loading && !result) return null
 
   const sukses = !loading && result && result.ditemukan === true
   const gagal = !loading && result && result.ditemukan !== true
 
   return (
-    <div className="absolute bottom-4 left-4 z-10 w-80 max-h-[70vh] overflow-y-auto bg-white rounded-lg shadow-xl border border-slate-200">
+    <div className={WRAPPER_CLASS[variant] ?? WRAPPER_CLASS.floating}>
       <div className="flex items-center gap-2 px-4 py-3 border-b border-slate-200 sticky top-0 bg-white">
         <Target size={16} className="text-brand-blue shrink-0" />
         <h3 className="font-semibold text-slate-800 text-sm flex-1">

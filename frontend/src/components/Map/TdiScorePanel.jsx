@@ -35,12 +35,24 @@ import { X, MapPinOff, ArrowUpRight, ArrowDownRight } from 'lucide-react'
  * TIDAK tumpang tindih pada praktiknya karena keduanya digerakkan oleh
  * handleMapClick yang eksklusif per state `analyticOverlay` (hanya salah satu
  * dari caiResult/tdiResult yang pernah terisi pada satu waktu, lihat App.jsx).
+ *
+ * Prop `variant` (BARU 2026-09-13, permintaan Sam, pola sama dg CaiScorePanel):
+ *   - 'floating' (default) -> overlay absolute di atas peta (tab "Peta
+ *     Interaktif", TIDAK berubah).
+ *   - 'inline' -> blok biasa di panel kanan tab "Analisis Spasial", di bawah
+ *     toggle overlai analitik — bukan menutupi peta.
  */
-export default function TdiScorePanel({ loading, result, usingDemo, onClose }) {
+const WRAPPER_CLASS = {
+  floating:
+    'absolute bottom-3 left-3 z-10 w-[19rem] max-h-[75%] overflow-y-auto bg-white rounded-lg shadow-xl border border-slate-200',
+  inline: 'w-full bg-white rounded-lg border border-slate-200',
+}
+
+export default function TdiScorePanel({ loading, result, usingDemo, onClose, variant = 'floating' }) {
   if (!loading && !result) return null
 
   return (
-    <div className="absolute bottom-3 left-3 z-10 w-[19rem] max-h-[75%] overflow-y-auto bg-white rounded-lg shadow-xl border border-slate-200">
+    <div className={WRAPPER_CLASS[variant] ?? WRAPPER_CLASS.floating}>
       <div className="flex items-center gap-2 px-3 py-2.5 border-b border-slate-200 sticky top-0 bg-white">
         <MapPinOff size={15} className="text-brand-orange shrink-0" />
         <h3 className="font-semibold text-slate-800 text-sm flex-1">Rincian Transit Desert Index</h3>

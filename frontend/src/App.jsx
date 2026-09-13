@@ -1730,24 +1730,36 @@ export default function App() {
             clickMarker={clickMarker}
             layers={mapLayers}
           >
-            <CaiScorePanel
-              loading={caiLoading}
-              result={caiResult}
-              usingDemo={caiUsingDemo}
-              onClose={() => {
-                setCaiResult(null)
-                setClickMarker(null)
-              }}
-            />
-            <TdiScorePanel
-              loading={tdiLoading}
-              result={tdiResult}
-              usingDemo={tdiUsingDemo}
-              onClose={() => {
-                setTdiResult(null)
-                setClickMarker(null)
-              }}
-            />
+            {/* Varian 'floating' (default) HANYA di luar tab Analisis Spasial
+                sejak 2026-09-13 (permintaan Sam) -- tab itu sekarang merender
+                CaiScorePanel/TdiScorePanel-nya SENDIRI dg variant="inline" di
+                panel kanan (lihat AnalisisSpasial.jsx), supaya rincian klik
+                tampil di bawah toggle overlai, bukan menutupi peta dg kotak
+                melayang. State caiResult/tdiResult tetap satu-satunya sumber
+                (di-lift ke sini), cuma tempat rendering-nya yang berbeda per
+                tab -- tidak ada duplikasi RPC/klik. */}
+            {activeTab !== 'analisis' && (
+              <CaiScorePanel
+                loading={caiLoading}
+                result={caiResult}
+                usingDemo={caiUsingDemo}
+                onClose={() => {
+                  setCaiResult(null)
+                  setClickMarker(null)
+                }}
+              />
+            )}
+            {activeTab !== 'analisis' && (
+              <TdiScorePanel
+                loading={tdiLoading}
+                result={tdiResult}
+                usingDemo={tdiUsingDemo}
+                onClose={() => {
+                  setTdiResult(null)
+                  setClickMarker(null)
+                }}
+              />
+            )}
             {activeTab === 'peta' && (
               <MapLegend
                 groups={[
@@ -1862,6 +1874,20 @@ export default function App() {
                 onWilayahSelected={setSorotWilayah}
                 layerVis={layerVis}
                 onLayerVisChange={setLayerVis}
+                caiLoading={caiLoading}
+                caiResult={caiResult}
+                caiUsingDemo={caiUsingDemo}
+                onCaiClose={() => {
+                  setCaiResult(null)
+                  setClickMarker(null)
+                }}
+                tdiLoading={tdiLoading}
+                tdiResult={tdiResult}
+                tdiUsingDemo={tdiUsingDemo}
+                onTdiClose={() => {
+                  setTdiResult(null)
+                  setClickMarker(null)
+                }}
               />
             )}
             {activeTab === 'ai' && <AIPanel latestSimulasi={lastSimResult} />}
