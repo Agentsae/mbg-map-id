@@ -1890,7 +1890,13 @@ export default function App() {
                 }}
               />
             )}
-            {activeTab === 'ai' && <AIPanel latestSimulasi={lastSimResult} />}
+            {activeTab === 'ai' && (
+              <AIPanel
+                latestSimulasi={lastSimResult}
+                mapInstance={mapInstance}
+                onWilayahSelected={setSorotWilayah}
+              />
+            )}
             {activeTab === 'simulasi' && (
               <SimulationPanel
                 active={simulationActive}
